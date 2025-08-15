@@ -3052,7 +3052,7 @@ const TrackerHubPage = ({ onBack, onNavigate }) => {
 const InstallBanner = ({ onInstallClick }) => {
     return (
         <div className="install-banner" role="region" aria-label="Install App Banner">
-            <p>Get the full app experience. Install to your device for easy access and offline support.</p>
+            <p>Install this app to get the full experience, including offline access and helpful notifications.</p>
             <button onClick={onInstallClick} className="install-button">Install Now</button>
         </div>
     );
