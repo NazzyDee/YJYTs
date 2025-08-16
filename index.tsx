@@ -1149,6 +1149,424 @@ const AuditTestPage = ({ onBack }) => {
     );
 };
 
+// --- Three Good Things Page Component ---
+const ThreeGoodThingsPage = ({ onBack }) => {
+    const [things, setThings] = useState([
+        { what: '', why: '' },
+        { what: '', why: '' },
+        { what: '', why: '' },
+    ]);
+    const [history, setHistory] = useState(() => {
+        try {
+            const saved = localStorage.getItem('threeGoodThingsHistory');
+            return saved ? JSON.parse(saved) : [];
+        } catch (e) {
+            console.error("Could not load Three Good Things history", e);
+            return [];
+        }
+    });
+    const [confirmationMessage, setConfirmationMessage] = useState('');
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('threeGoodThingsHistory', JSON.stringify(history));
+        } catch (e) {
+            console.error("Could not save Three Good Things history", e);
+        }
+    }, [history]);
+
+    const handleThingChange = (index, field, value) => {
+        const newThings = [...things];
+        newThings[index][field] = value;
+        setThings(newThings);
+    };
+
+    const handleSave = () => {
+        const validThings = things.filter(t => t.what.trim() !== '');
+        if (validThings.length === 0) return;
+
+        const newEntry = {
+            id: Date.now(),
+            date: new Date().toISOString(),
+            things: validThings,
+        };
+
+        setHistory([newEntry, ...history]);
+        setThings([ { what: '', why: '' }, { what: '', why: '' }, { what: '', why: '' } ]);
+        
+        trackEvent('complete_exercise', 'Positive Psychology', 'Three Good Things');
+
+        setConfirmationMessage('Entry saved successfully!');
+        setTimeout(() => setConfirmationMessage(''), 3000);
+    };
+
+    const isSaveDisabled = things.every(t => t.what.trim() === '');
+    const today = new Date().toLocaleDateString('en-AU');
+    const hasLoggedToday = history.some(entry => new Date(entry.date).toLocaleDateString('en-AU') === today);
+
+    return (
+        <div className="page-container">
+            <div className="content-with-side-button">
+                <div className="side-button-wrapper">
+                    <button onClick={onBack} className="home-button" aria-label="Go back">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+                       <span>Back</span>
+                    </button>
+                </div>
+                <main className="tracker-content">
+                    <div className="page-header-text">
+                        <h1 className="app-title">Three Good Things</h1>
+                        <p className="app-subtitle">Reflect on three things that went well today and why.</p>
+                    </div>
+                    
+                    <div className="card" style={{ gap: '2rem', padding: '2.5rem' }}>
+                        {things.map((thing, index) => (
+                            <div className="form-group" key={index}>
+                                <label htmlFor={`good-thing-${index}`} style={{ fontSize: '1.1rem' }}>Good Thing #{index + 1}</label>
+                                <input
+                                    id={`good-thing-${index}`}
+                                    type="text"
+                                    placeholder="What went well?"
+                                    value={thing.what}
+                                    onChange={(e) => handleThingChange(index, 'what', e.target.value)}
+                                />
+                                <textarea
+                                    placeholder="Why was this a good thing for you? (Optional)"
+                                    value={thing.why}
+                                    onChange={(e) => handleThingChange(index, 'why', e.target.value)}
+                                    rows={3}
+                                />
+                            </div>
+                        ))}
+                        
+                        {hasLoggedToday && !isSaveDisabled && (
+                           <p style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '-1rem' }}>
+                               You've already logged for today! Feel free to add more positive moments.
+                           </p>
+                        )}
+
+                        <button className="log-button" onClick={handleSave} disabled={isSaveDisabled}>
+                            Save Today's Entry
+                        </button>
+                        {confirmationMessage && (
+                            <div className="confirmation-message">{confirmationMessage}</div>
+                        )}
+                    </div>
+                    
+                    <hr className="history-divider" />
+                    <div className="history-section">
+                        <h3 className="history-title">Your Reflections</h3>
+                        {history.length > 0 ? (
+                            <ul className="history-list" style={{ gap: '1.5rem' }}>
+                                {history.map(entry => (
+                                    <li key={entry.id} className="card" style={{ padding: '1.5rem', alignItems: 'flex-start', textAlign: 'left', gap: '1rem', cursor: 'default' }}>
+                                        <h4 style={{ color: 'var(--accent-teal)', width: '100%', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
+                                            {new Date(entry.date).toLocaleDateString('en-AU', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                                        </h4>
+                                        {entry.things.map((t, i) => (
+                                            <div key={i} style={{ width: '100%' }}>
+                                                <p style={{ fontWeight: '700', color: 'var(--text-light)' }}>{i + 1}. {t.what}</p>
+                                                {t.why && <p style={{ fontStyle: 'italic', color: 'var(--text-muted)', paddingLeft: '1.5rem', marginTop: '0.25rem' }}>- {t.why}</p>}
+                                            </div>
+                                        ))}
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="no-history-message">Your past reflections will appear here.</p>
+                        )}
+                    </div>
+                </main>
+            </div>
+        </div>
+    );
+};
+
+// --- Wind-Down Toolkit Page Component ---
+const windDownActivities = [
+    {
+        category: 'Relax Your Body',
+        items: [
+            { id: 'wd-stretch', title: 'Gentle Stretching', description: 'Release muscle tension and improve circulation before bed.', icon: '🧘' },
+            { id: 'wd-bath', title: 'Warm Bath or Shower', description: 'Helps lower your core body temperature, signaling your body it\'s time for sleep.', icon: '🛀' },
+            { id: 'wd-tea', title: 'Sip Herbal Tea', description: 'Drink a calming, caffeine-free tea like chamomile or lavender.', icon: '🍵' },
+            { id: 'wd-self-massage', title: 'Self-Massage', description: 'Use a foam roller or your hands to massage sore muscles.', icon: '💆' },
+        ]
+    },
+    {
+        category: 'Calm Your Mind',
+        items: [
+            { id: 'wd-read', title: 'Read a Book', description: 'Choose a physical book over a screen to reduce blue light exposure.', icon: '📚' },
+            { id: 'wd-journal', title: 'Journal', description: 'Write down worries or thoughts to clear your mind before sleeping.', icon: '✏️' },
+            { id: 'wd-meditate', title: 'Meditate', description: 'Practice mindfulness or guided meditation to reduce stress.', icon: '🧠' },
+            { id: 'wd-music', title: 'Listen to Calm Music', description: 'Choose relaxing ambient sounds, classical music, or a sleep podcast.', icon: '🎶' },
+        ]
+    },
+    {
+        category: 'Prepare Your Environment',
+        items: [
+            { id: 'wd-dim-lights', title: 'Dim the Lights', description: 'Lower light levels an hour before bed to boost melatonin production.', icon: '💡' },
+            { id: 'wd-tidy', title: 'Tidy Your Space', description: 'A clean, organized room can promote a sense of calm.', icon: '🧹' },
+            { id: 'wd-set-alarm', title: 'Set Alarm for Tomorrow', description: 'Avoid last-minute phone use by setting your alarm early.', icon: '⏰' },
+            { id: 'wd-cool-room', title: 'Cool Down Your Room', description: 'A cooler room temperature (around 18°C / 65°F) is ideal for sleep.', icon: '❄️' },
+        ]
+    }
+];
+
+const WindDownToolkitPage = ({ onBack }) => {
+    const [myRoutine, setMyRoutine] = useState(() => {
+        try {
+            const saved = localStorage.getItem('windDownRoutine');
+            return saved ? JSON.parse(saved) : [];
+        } catch (e) { 
+            console.error("Could not load wind-down routine", e);
+            return []; 
+        }
+    });
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('windDownRoutine', JSON.stringify(myRoutine));
+        } catch (e) { console.error("Could not save wind-down routine", e); }
+    }, [myRoutine]);
+
+    const handleToggleActivity = (activity) => {
+        setMyRoutine(prev => {
+            const isInRoutine = prev.some(item => item.id === activity.id);
+            if (isInRoutine) {
+                return prev.filter(item => item.id !== activity.id);
+            } else {
+                return [...prev, activity];
+            }
+        });
+        trackEvent('customize_routine', 'Wind-Down Toolkit', activity.title);
+    };
+
+    const isInMyRoutine = (activityId) => myRoutine.some(item => item.id === activityId);
+
+    // Placeholder for future functionality
+    const handleStartRoutine = () => {
+        alert("Starting your wind-down routine!");
+        trackEvent('start_routine', 'Wind-Down Toolkit');
+    };
+
+    return (
+        <div className="page-container">
+            <div className="content-with-side-button">
+                <div className="side-button-wrapper">
+                    <button onClick={onBack} className="home-button" aria-label="Go back">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+                       <span>Back</span>
+                    </button>
+                </div>
+                <main className="tracker-content">
+                    <div className="page-header-text">
+                        <h1 className="app-title">Design Your Wind-Down</h1>
+                        <p className="app-subtitle">Build a personalized routine to prepare your mind and body for sleep.</p>
+                    </div>
+
+                    {myRoutine.length > 0 && (
+                        <div className="card wind-down-my-routine">
+                            <h3 className="wind-down-section-title">Your Routine</h3>
+                            <div className="wind-down-routine-chips">
+                                {myRoutine.map(activity => (
+                                    <span key={activity.id} className="wind-down-chip">
+                                        {activity.icon} {activity.title}
+                                    </span>
+                                ))}
+                            </div>
+                            <button className="log-button" onClick={handleStartRoutine}>Start Wind-Down</button>
+                        </div>
+                    )}
+                    
+                    <div className="wind-down-toolkit">
+                        <h3 className="wind-down-section-title">Activity Toolkit</h3>
+                        {windDownActivities.map(category => (
+                            <div key={category.category} className="wind-down-category">
+                                <h4>{category.category}</h4>
+                                <div className="wind-down-activity-grid">
+                                    {category.items.map(activity => (
+                                        <button 
+                                            key={activity.id} 
+                                            className={`card wind-down-activity-card ${isInMyRoutine(activity.id) ? 'selected' : ''}`}
+                                            onClick={() => handleToggleActivity(activity)}
+                                        >
+                                            <span className="wind-down-activity-icon">{activity.icon}</span>
+                                            <div className="wind-down-activity-text">
+                                                <p className="wind-down-activity-title">{activity.title}</p>
+                                                <p className="wind-down-activity-desc">{activity.description}</p>
+                                            </div>
+                                            <div className="wind-down-activity-selector">
+                                                {isInMyRoutine(activity.id) ? '✓' : '+'}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </main>
+            </div>
+        </div>
+    );
+};
+
+// --- Thought Triangle Page Component ---
+const ThoughtTrianglePage = ({ onBack }) => {
+    const [entry, setEntry] = useState({
+        situation: '',
+        thoughts: '',
+        feelings: '',
+        behaviors: '',
+    });
+    const [history, setHistory] = useState(() => {
+        try {
+            const saved = localStorage.getItem('thoughtTriangleHistory');
+            return saved ? JSON.parse(saved) : [];
+        } catch (e) {
+            console.error("Could not load Thought Triangle history", e);
+            return [];
+        }
+    });
+    const [confirmationMessage, setConfirmationMessage] = useState('');
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('thoughtTriangleHistory', JSON.stringify(history));
+        } catch (e) {
+            console.error("Could not save Thought Triangle history", e);
+        }
+    }, [history]);
+
+    const handleChange = (field, value) => {
+        setEntry(prev => ({ ...prev, [field]: value }));
+    };
+
+    const handleSave = () => {
+        if (entry.situation.trim() === '') return;
+
+        const newEntry = {
+            id: Date.now(),
+            date: new Date().toISOString(),
+            ...entry
+        };
+
+        setHistory([newEntry, ...history]);
+        setEntry({ situation: '', thoughts: '', feelings: '', behaviors: '' });
+        
+        trackEvent('complete_exercise', 'CBT', 'Thought Triangle');
+
+        setConfirmationMessage('Entry saved successfully!');
+        setTimeout(() => setConfirmationMessage(''), 3000);
+    };
+
+    const isSaveDisabled = entry.situation.trim() === '';
+
+    return (
+        <div className="page-container">
+            <div className="content-with-side-button">
+                <div className="side-button-wrapper">
+                    <button onClick={onBack} className="home-button" aria-label="Go back">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+                       <span>Back</span>
+                    </button>
+                </div>
+                <main className="tracker-content">
+                    <div className="page-header-text">
+                        <h1 className="app-title">The Thought Triangle</h1>
+                        <p className="app-subtitle">Explore the connection between your thoughts, feelings, and behaviors.</p>
+                    </div>
+                    
+                    <div className="card" style={{ gap: '2rem', padding: '2.5rem' }}>
+                        <div className="form-group">
+                            <label htmlFor="triangle-situation" style={{ fontSize: '1.1rem' }}>The Situation</label>
+                            <textarea
+                                id="triangle-situation"
+                                placeholder="What happened?"
+                                value={entry.situation}
+                                onChange={(e) => handleChange('situation', e.target.value)}
+                                rows={3}
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label htmlFor="triangle-thoughts" style={{ fontSize: '1.1rem' }}>Your Thoughts</label>
+                            <textarea
+                                id="triangle-thoughts"
+                                placeholder="What went through your mind?"
+                                value={entry.thoughts}
+                                onChange={(e) => handleChange('thoughts', e.target.value)}
+                                rows={4}
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label htmlFor="triangle-feelings" style={{ fontSize: '1.1rem' }}>Your Feelings</label>
+                            <textarea
+                                id="triangle-feelings"
+                                placeholder="How did that make you feel?"
+                                value={entry.feelings}
+                                onChange={(e) => handleChange('feelings', e.target.value)}
+                                rows={3}
+                            />
+                        </div>
+                        <div className="form-group">
+                            <label htmlFor="triangle-behaviors" style={{ fontSize: '1.1rem' }}>Your Behaviors</label>
+                            <textarea
+                                id="triangle-behaviors"
+                                placeholder="What did you do?"
+                                value={entry.behaviors}
+                                onChange={(e) => handleChange('behaviors', e.target.value)}
+                                rows={3}
+                            />
+                        </div>
+
+                        <button className="log-button" onClick={handleSave} disabled={isSaveDisabled}>
+                            Save Entry
+                        </button>
+                        {confirmationMessage && (
+                            <div className="confirmation-message">{confirmationMessage}</div>
+                        )}
+                    </div>
+                    
+                    <hr className="history-divider" />
+                    <div className="history-section">
+                        <h3 className="history-title">Your Triangle History</h3>
+                        {history.length > 0 ? (
+                            <ul className="history-list" style={{ gap: '1.5rem' }}>
+                                {history.map(item => (
+                                    <li key={item.id} className="card" style={{ padding: '1.5rem', alignItems: 'flex-start', textAlign: 'left', gap: '1rem', cursor: 'default' }}>
+                                        <h4 style={{ color: 'var(--accent-teal)', width: '100%', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
+                                            {new Date(item.date).toLocaleDateString('en-AU', { weekday: 'long', month: 'long', day: 'numeric' })}
+                                        </h4>
+                                        <div style={{ width: '100%' }}>
+                                            <p style={{ fontWeight: '700', color: 'var(--text-light)', marginBottom: '0.25rem' }}>Situation:</p>
+                                            <p style={{ color: 'var(--text-muted)', paddingLeft: '1rem', whiteSpace: 'pre-wrap' }}>{item.situation}</p>
+                                        </div>
+                                        <div style={{ width: '100%' }}>
+                                            <p style={{ fontWeight: '700', color: 'var(--text-light)', marginBottom: '0.25rem' }}>Thoughts:</p>
+                                            <p style={{ color: 'var(--text-muted)', paddingLeft: '1rem', whiteSpace: 'pre-wrap' }}>{item.thoughts || 'N/A'}</p>
+                                        </div>
+                                        <div style={{ width: '100%' }}>
+                                            <p style={{ fontWeight: '700', color: 'var(--text-light)', marginBottom: '0.25rem' }}>Feelings:</p>
+                                            <p style={{ color: 'var(--text-muted)', paddingLeft: '1rem', whiteSpace: 'pre-wrap' }}>{item.feelings || 'N/A'}</p>
+                                        </div>
+                                        <div style={{ width: '100%' }}>
+                                            <p style={{ fontWeight: '700', color: 'var(--text-light)', marginBottom: '0.25rem' }}>Behaviors:</p>
+                                            <p style={{ color: 'var(--text-muted)', paddingLeft: '1rem', whiteSpace: 'pre-wrap' }}>{item.behaviors || 'N/A'}</p>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="no-history-message">Your past reflections will appear here.</p>
+                        )}
+                    </div>
+                </main>
+            </div>
+        </div>
+    );
+};
+
+
 // --- Know Yourself Page Component ---
 
 const valuesData = [
@@ -1244,7 +1662,7 @@ const shuffle = (array) => {
 };
 
 const KnowYourselfPage = ({ onBack, initialStep = 'intro' }) => {
-  const [exerciseStep, setExerciseStep] = useState(initialStep); // 'intro', 'deck-selection', 'sort-all', 'sort-top-10', 'sort-top-5', 'results', 'audit-test'
+  const [exerciseStep, setExerciseStep] = useState(initialStep); // 'intro', 'deck-selection', 'sort-all', 'sort-top-10', 'sort-top-5', 'results', 'audit-test', 'three-good-things', 'wind-down-toolkit', 'thought-triangle'
   const [deck, setDeck] = useState([]);
   const [keepPile, setKeepPile] = useState([]);
   const [discardPile, setDiscardPile] = useState([]);
@@ -1348,6 +1766,18 @@ const KnowYourselfPage = ({ onBack, initialStep = 'intro' }) => {
       return <AuditTestPage onBack={() => setExerciseStep('intro')} />;
   }
 
+  if (exerciseStep === 'three-good-things') {
+      return <ThreeGoodThingsPage onBack={() => setExerciseStep('intro')} />;
+  }
+
+  if (exerciseStep === 'wind-down-toolkit') {
+      return <WindDownToolkitPage onBack={() => setExerciseStep('intro')} />;
+  }
+
+  if (exerciseStep === 'thought-triangle') {
+    return <ThoughtTrianglePage onBack={() => setExerciseStep('intro')} />;
+  }
+
   if (exerciseStep === 'intro') {
     return (
       <div className="page-container">
@@ -1375,6 +1805,21 @@ const KnowYourselfPage = ({ onBack, initialStep = 'intro' }) => {
                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
                       <h2 className="card-title">Values Exercise</h2>
                       <p className="card-description">Identify your core personal values.</p>
+                  </button>
+                  <button className="card" aria-label="Three Good Things" onClick={() => setExerciseStep('three-good-things')}>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+                      <h2 className="card-title">Three Good Things</h2>
+                      <p className="card-description">A daily exercise to cultivate gratitude and positivity.</p>
+                  </button>
+                   <button className="card" aria-label="Wind-Down Toolkit" onClick={() => setExerciseStep('wind-down-toolkit')}>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+                      <h2 className="card-title">Wind-Down Toolkit</h2>
+                      <p className="card-description">Build a personalized routine for better sleep.</p>
+                  </button>
+                  <button className="card" aria-label="Thought Triangle" onClick={() => setExerciseStep('thought-triangle')}>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 2L2 21h20L12 2z"></path></svg>
+                      <h2 className="card-title">Thought Triangle</h2>
+                      <p className="card-description">Map your thoughts, feelings, & behaviors.</p>
                   </button>
                   <button className="card" aria-label="Explore Your Feelings" onClick={() => setIsWheelOpen(true)}>
                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><path d="M8 15h8"></path><line x1="9" y1="10" x2="9.01" y2="10"></line><line x1="15" y1="10" x2="15.01" y2="10"></line></svg>
@@ -3051,7 +3496,7 @@ const HomePage = ({ onNavigate, username }) => {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
     const homeCards = [
-        { title: 'Your Journey', page: 'journey', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M5 21C10 15 16 10 21 3c-1 5-4 9-9 13s-7 5-7 5z"></path></svg>, size: 'large' },
+        { title: 'Your Journey', page: 'journey', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M17 5C11 11 11 21 17 19 13 17 13 7 17 5Z"></path></svg>, size: 'large' },
         { title: 'Tracker', page: 'tracker-hub', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> },
         { title: 'Know Yourself', page: 'know-yourself', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> },
         { title: 'Grounding', page: 'grounding', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"></path><path d="M12 13v8"></path><path d="M9 21h6"></path></svg> },
