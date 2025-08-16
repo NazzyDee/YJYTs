@@ -1567,7 +1567,7 @@ const ThoughtTrianglePage = ({ onBack }) => {
 };
 
 
-// --- Know Yourself Page Component ---
+// --- Values Exercise Page Component (formerly KnowYourselfPage) ---
 
 const valuesData = [
   { title: 'Achievement', description: 'To accomplish something important and successfully.' },
@@ -1661,15 +1661,14 @@ const shuffle = (array) => {
   return newArray;
 };
 
-const KnowYourselfPage = ({ onBack, initialStep = 'intro' }) => {
-  const [exerciseStep, setExerciseStep] = useState(initialStep); // 'intro', 'deck-selection', 'sort-all', 'sort-top-10', 'sort-top-5', 'results', 'audit-test', 'three-good-things', 'wind-down-toolkit', 'thought-triangle'
+const ValuesExercisePage = ({ onBack, initialStep = 'deck-selection' }) => {
+  const [exerciseStep, setExerciseStep] = useState(initialStep); // 'deck-selection', 'sort-all', 'sort-top-10', 'sort-top-5', 'results'
   const [deck, setDeck] = useState([]);
   const [keepPile, setKeepPile] = useState([]);
   const [discardPile, setDiscardPile] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [animation, setAnimation] = useState('');
   const [activeTab, setActiveTab] = useState('keep');
-  const [isWheelOpen, setIsWheelOpen] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
 
   const startExercise = (deckData) => {
@@ -1762,88 +1761,12 @@ const KnowYourselfPage = ({ onBack, initialStep = 'intro' }) => {
   
   const showNextButton = (exerciseStep === 'sort-all' && isDeckEmpty) || (exerciseStep !== 'sort-all' && (isKeepLimitReached || (isDeckEmpty && keepPile.length > 0)));
 
-  if (exerciseStep === 'audit-test') {
-      return <AuditTestPage onBack={() => setExerciseStep('intro')} />;
-  }
-
-  if (exerciseStep === 'three-good-things') {
-      return <ThreeGoodThingsPage onBack={() => setExerciseStep('intro')} />;
-  }
-
-  if (exerciseStep === 'wind-down-toolkit') {
-      return <WindDownToolkitPage onBack={() => setExerciseStep('intro')} />;
-  }
-
-  if (exerciseStep === 'thought-triangle') {
-    return <ThoughtTrianglePage onBack={() => setExerciseStep('intro')} />;
-  }
-
-  if (exerciseStep === 'intro') {
-    return (
-      <div className="page-container">
-        {isWheelOpen && (
-            <FeelingsWheel 
-                onFeelingSelect={() => setIsWheelOpen(false)}
-                onClose={() => setIsWheelOpen(false)}
-                confirmText="Done Exploring"
-            />
-        )}
-        <div className="content-with-side-button">
-          <div className="side-button-wrapper">
-            <button onClick={onBack} className="home-button" aria-label="Go back to home">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-              <span>Home</span>
-            </button>
-          </div>
-          <main>
-             <div className="page-header-text">
-                <h1 className="app-title">Know Yourself</h1>
-                <p className="app-subtitle">Discover what's important to you.</p>
-             </div>
-             <div className="card-grid">
-                  <button className="card" aria-label="Values" onClick={() => setExerciseStep('deck-selection')}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-                      <h2 className="card-title">Values Exercise</h2>
-                      <p className="card-description">Identify your core personal values.</p>
-                  </button>
-                  <button className="card" aria-label="Three Good Things" onClick={() => setExerciseStep('three-good-things')}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
-                      <h2 className="card-title">Three Good Things</h2>
-                      <p className="card-description">A daily exercise to cultivate gratitude and positivity.</p>
-                  </button>
-                   <button className="card" aria-label="Wind-Down Toolkit" onClick={() => setExerciseStep('wind-down-toolkit')}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
-                      <h2 className="card-title">Wind-Down Toolkit</h2>
-                      <p className="card-description">Build a personalized routine for better sleep.</p>
-                  </button>
-                  <button className="card" aria-label="Thought Triangle" onClick={() => setExerciseStep('thought-triangle')}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 2L2 21h20L12 2z"></path></svg>
-                      <h2 className="card-title">Thought Triangle</h2>
-                      <p className="card-description">Map your thoughts, feelings, & behaviors.</p>
-                  </button>
-                  <button className="card" aria-label="Explore Your Feelings" onClick={() => setIsWheelOpen(true)}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><path d="M8 15h8"></path><line x1="9" y1="10" x2="9.01" y2="10"></line><line x1="15" y1="10" x2="15.01" y2="10"></line></svg>
-                      <h2 className="card-title">Feelings Explorer</h2>
-                      <p className="card-description">Explore a wide range of emotions.</p>
-                  </button>
-                  <button className="card" aria-label="AUDIT Test" onClick={() => setExerciseStep('audit-test')}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M14.5 2H9.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"></path><line x1="12" y1="18" x2="12.01" y2="18"></line></svg>
-                      <h2 className="card-title">AUDIT Test</h2>
-                      <p className="card-description">Assess your alcohol consumption patterns.</p>
-                  </button>
-             </div>
-          </main>
-        </div>
-      </div>
-    );
-  }
-
   if (exerciseStep === 'deck-selection') {
     return (
       <div className="page-container">
         <div className="content-with-side-button">
             <div className="side-button-wrapper">
-                <button onClick={initialStep === 'deck-selection' ? onBack : () => setExerciseStep('intro')} className="home-button" aria-label="Go back">
+                <button onClick={onBack} className="home-button" aria-label="Go back">
                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
                    <span>Back</span>
                 </button>
@@ -1924,8 +1847,8 @@ const KnowYourselfPage = ({ onBack, initialStep = 'intro' }) => {
         <div className="content-with-side-button">
             <div className="side-button-wrapper">
                  <button onClick={onBack} className="home-button" aria-label="Go back to home">
-                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                   <span>Home</span>
+                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+                   <span>Back</span>
                  </button>
             </div>
             <main className="values-exercise-container">
@@ -2107,9 +2030,9 @@ const FiveFourThreeTwoOnePage = ({ onBack, onHome }) => {
     <div className="page-container">
         <div className="content-with-side-button">
             <div className="side-button-wrapper">
-              <button onClick={onHome} className="home-button" aria-label="Go back to home">
-                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                 <span>Home</span>
+              <button onClick={onBack} className="home-button" aria-label="Go back">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+                 <span>Back</span>
               </button>
             </div>
             <main className="exercise-page-container">
@@ -2218,9 +2141,9 @@ const BreathingExercisePage = ({ onBack, onHome }) => {
     <div className="page-container">
        <div className="content-with-side-button">
             <div className="side-button-wrapper">
-              <button onClick={onHome} className="home-button" aria-label="Go back to home">
-                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                 <span>Home</span>
+              <button onClick={onBack} className="home-button" aria-label="Go back">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+                 <span>Back</span>
               </button>
             </div>
             <main className="exercise-page-container">
@@ -2339,9 +2262,9 @@ const GuidedAudioPage = ({ onBack, onHome }) => {
             />
             <div className="content-with-side-button">
                 <div className="side-button-wrapper">
-                    <button onClick={onHome} className="home-button" aria-label="Go back to home">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                        <span>Home</span>
+                    <button onClick={onBack} className="home-button" aria-label="Go back">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+                        <span>Back</span>
                     </button>
                 </div>
                 <main className="exercise-page-container">
@@ -2566,63 +2489,6 @@ const ProfilePage = ({ onBack }) => {
 };
 
 
-// --- Grounding Page Component ---
-const GroundingPage = ({ onBack, onNavigate }) => {
-  const groundingCards = [
-    { 
-      title: 'The 5-4-3-2-1 Method', 
-      enabled: true,
-      page: 'five-four-three-two-one',
-      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M7 20h10" /><path d="M10 20v-6l-2-2a3 3 0 0 1-2-2.8V8.2a3 3 0 0 1 2-2.8l2-1.2a3 3 0 0 1 3.2 0l2 1.2a3 3 0 0 1 2 2.8v1a3 3 0 0 1-2 2.8l-2 2v6" /></svg>
-    },
-    { 
-      title: 'Breathing', 
-      enabled: true, 
-      page: 'breathing-exercise',
-      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg>
-    },
-    {
-      title: 'Guided Audio',
-      enabled: true,
-      page: 'guided-audio',
-      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>
-    }
-  ];
-
-  return (
-    <div className="page-container">
-      <div className="content-with-side-button">
-        <div className="side-button-wrapper">
-            <button onClick={onBack} className="home-button" aria-label="Go back to home">
-               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-               <span>Home</span>
-            </button>
-        </div>
-        <main>
-           <div className="page-header-text">
-              <h1 className="app-title">Grounding Techniques</h1>
-              <p className="app-subtitle">Tools to help you anchor in the present moment.</p>
-           </div>
-           <div className="card-grid">
-            {groundingCards.map((card) => (
-                <button
-                key={card.title}
-                className={`card ${!card.enabled ? 'disabled' : ''}`}
-                disabled={!card.enabled}
-                onClick={() => card.enabled && onNavigate(card.page)}
-                aria-label={card.title}
-                >
-                {card.icon}
-                <h2 className="card-title">{card.title}</h2>
-                </button>
-            ))}
-           </div>
-        </main>
-      </div>
-    </div>
-  );
-};
-
 // --- AI Summary Modal Component ---
 const AISummaryModal = ({ onClose }) => {
     const [summary, setSummary] = useState('');
@@ -2656,17 +2522,21 @@ const AISummaryModal = ({ onClose }) => {
                     return `Feeling: ${entry.feeling}, Day: ${entry.day}, Substance: ${entry.substance}, Amount: ${displayAmount.trim()}, Location: ${entry.location || 'N/A'}`;
                 }).join('\n');
 
-                const prompt = `You are a compassionate and insightful journal assistant. Your goal is to help me understand myself better by analyzing my recent journal entries. Do not provide medical advice. My name is ${username}.
+                const systemInstruction = `You are a compassionate and insightful journal assistant. Your goal is to help me understand myself better by analyzing my recent journal entries. Do not provide medical advice. 
+You should always address the user by their name. Provide a brief, insightful summary in 2-3 short paragraphs. Look for patterns related to feelings, substance use, and locations. Highlight any potential connections you notice in a supportive and gentle tone. Use markdown for formatting, like bolding key insights.`;
 
-Here are my recent journal entries:
+                const userPrompt = `My name is ${username}. Here are my recent journal entries:
 ${formattedEntries}
 
-Based on these entries, please provide a brief, insightful summary in 2-3 short paragraphs. Look for patterns related to my feelings, substance use, and locations. Highlight any potential connections you notice in a supportive and gentle tone. Use markdown for formatting, like bolding key insights.`;
+Please provide my summary.`;
                 
                 trackEvent('generate_ai_summary', 'AI Features', 'Journal Summary');
                 const response = await ai.models.generateContent({
                     model: 'gemini-2.5-flash',
-                    contents: prompt,
+                    contents: userPrompt,
+                    config: {
+                        systemInstruction: systemInstruction,
+                    },
                 });
 
                 setSummary(response.text);
@@ -2887,7 +2757,7 @@ const JourneyPage = ({ onBack, onNavigate }) => {
                             ) : (
                                 <div className="no-data-placeholder">
                                     <p>You haven't identified your core values yet. Discovering them can provide a compass for your journey.</p>
-                                    <button onClick={() => onNavigate('know-yourself', { initialStep: 'deck-selection' })} className="exercise-nav-button">
+                                    <button onClick={() => onNavigate('values-exercise', { initialStep: 'deck-selection' })} className="exercise-nav-button">
                                         Find Your Values
                                     </button>
                                 </div>
@@ -2958,7 +2828,7 @@ const JourneyPage = ({ onBack, onNavigate }) => {
                             ) : (
                                <div className="no-data-placeholder">
                                     <p>Grounding exercises help in moments of stress. Try one to start building your history.</p>
-                                    <button onClick={() => onNavigate('grounding')} className="exercise-nav-button">
+                                    <button onClick={() => onNavigate('toolkit')} className="exercise-nav-button">
                                         Explore Techniques
                                     </button>
                                 </div>
@@ -3260,71 +3130,57 @@ const GoalsPage = ({ onBack }) => {
 
 // --- Sobriety Clock Component ---
 const SobrietyClock = ({ size = 'large', onNavigate }) => {
-    const [displayValue, setDisplayValue] = useState(0);
-    const [displayUnit, setDisplayUnit] = useState('Seconds');
-    const [startTime, setStartTime] = useState(null);
-
-    useEffect(() => {
-        let isMounted = true;
-        
-        const setupClock = () => {
+    // Lazily initialize startTime from localStorage to avoid re-reading on every render.
+    const [startTime] = useState(() => {
+        try {
             const storedHistory = localStorage.getItem('journalHistory');
             const history = storedHistory ? JSON.parse(storedHistory) : [];
-            const lastEntryTime = history.length > 0 && history[0].entryTimestamp ? history[0].entryTimestamp : null;
-            
-            if (isMounted) {
-                setStartTime(lastEntryTime);
-            }
+            return history.length > 0 && history[0].entryTimestamp ? history[0].entryTimestamp : null;
+        } catch (e) {
+            console.error("Failed to parse journal history for sobriety clock", e);
+            return null;
+        }
+    });
 
-            if (lastEntryTime) {
-                const interval = setInterval(() => {
-                    if (!isMounted) return;
+    // A single function to calculate the time display properties.
+    const calculateTimeDisplay = (fromTime) => {
+        if (!fromTime) return { value: 0, unit: 'Seconds' };
 
-                    const now = Date.now();
-                    const diff = now - lastEntryTime;
-                    
-                    if (diff < 0) {
-                        setDisplayValue(0);
-                        setDisplayUnit('Seconds');
-                        return;
-                    }
+        const now = Date.now();
+        const diff = now - fromTime;
 
-                    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-                    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-                    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-                    const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-                    
-                    if (days > 0) {
-                        setDisplayValue(days);
-                        setDisplayUnit(days === 1 ? 'Day' : 'Days');
-                    } else if (hours > 0) {
-                        setDisplayValue(hours);
-                        setDisplayUnit(hours === 1 ? 'Hour' : 'Hours');
-                    } else if (minutes > 0) {
-                        setDisplayValue(minutes);
-                        setDisplayUnit(minutes === 1 ? 'Minute' : 'Minutes');
-                    } else {
-                        setDisplayValue(seconds);
-                        setDisplayUnit(seconds === 1 ? 'Second' : 'Seconds');
-                    }
-                }, 1000);
+        if (diff < 0) return { value: 0, unit: 'Seconds' };
 
-                return () => {
-                    isMounted = false;
-                    clearInterval(interval);
-                };
-            }
-        };
+        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
 
-        const cleanup = setupClock();
+        if (days > 0) return { value: days, unit: days === 1 ? 'Day' : 'Days' };
+        if (hours > 0) return { value: hours, unit: hours === 1 ? 'Hour' : 'Hours' };
+        if (minutes > 0) return { value: minutes, unit: minutes === 1 ? 'Minute' : 'Minutes' };
+        return { value: seconds, unit: seconds === 1 ? 'Second' : 'Seconds' };
+    };
+    
+    // Initialize the display state with the correct values from the start, preventing the flicker.
+    const [displayValue, setDisplayValue] = useState(() => calculateTimeDisplay(startTime).value);
+    const [displayUnit, setDisplayUnit] = useState(() => calculateTimeDisplay(startTime).unit);
 
-        return () => { 
-            isMounted = false;
-            if (cleanup) cleanup();
-        };
-    }, []);
+    useEffect(() => {
+        if (startTime) {
+            // Set up an interval to update the clock every second.
+            const interval = setInterval(() => {
+                const { value, unit } = calculateTimeDisplay(startTime);
+                setDisplayValue(value);
+                setDisplayUnit(unit);
+            }, 1000);
 
-    if (!startTime) {
+            // Clean up the interval when the component unmounts.
+            return () => clearInterval(interval);
+        }
+    }, [startTime]); // The effect depends only on startTime.
+
+    if (startTime === null) {
         return (
             <div className="card sobriety-clock-card-placeholder">
                 <h2 className="card-title">Sobriety Clock</h2>
@@ -3345,49 +3201,109 @@ const SobrietyClock = ({ size = 'large', onNavigate }) => {
 };
 
 
+// Data for menu search functionality
+const SEARCHABLE_ITEMS = [
+    { title: 'Profile', page: 'profile', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> },
+    { title: 'Data & Privacy', page: 'data-privacy', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg> },
+    { title: 'Known Bugs', page: 'known-bugs', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H9.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/><path d="m12 6-1 2-2 1 2 1 1 2 1-2 2-1-2-1z"/></svg> },
+    { title: 'Daily Journal', page: 'tracker', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> },
+    { title: 'Goals', page: 'goals', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg> },
+    { title: 'Breathing Exercise', page: 'breathing-exercise', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg> },
+    { title: '5-4-3-2-1 Method', page: 'five-four-three-two-one', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M7 20h10" /><path d="M10 20v-6l-2-2a3 3 0 0 1-2-2.8V8.2a3 3 0 0 1 2-2.8l2-1.2a3 3 0 0 1 3.2 0l2 1.2a3 3 0 0 1 2 2.8v1a3 3 0 0 1-2 2.8l-2 2v6" /></svg> },
+    { title: 'Guided Audio', page: 'guided-audio', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg> },
+    { title: 'Feelings Explorer', page: 'toolkit', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 15h8"></path><line x1="9" y1="10" x2="9.01" y2="10"></line><line x1="15" y1="10" x2="15.01" y2="10"></line></svg> },
+    { title: 'Values Exercise', page: 'values-exercise', params: { initialStep: 'deck-selection' }, icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg> },
+    { title: 'The Thought Triangle', page: 'thought-triangle', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 21h20L12 2z"></path></svg> },
+    { title: 'Three Good Things', page: 'three-good-things', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg> },
+    { title: 'Wind-Down Routine', page: 'wind-down-toolkit', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg> },
+    { title: 'AUDIT Alcohol Screen', page: 'audit-test', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H9.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"></path><line x1="12" y1="18" x2="12.01" y2="18"></line></svg> },
+];
+
 // --- Profile Menu Component ---
 const ProfileMenu = ({ isOpen, onClose, onNavigate }) => {
+    const [searchQuery, setSearchQuery] = useState('');
+
     const handleLogout = () => {
         if (window.confirm("Are you sure you want to log out?")) {
             window.location.reload();
         }
     };
 
+    const filteredItems = searchQuery
+        ? SEARCHABLE_ITEMS.filter(item =>
+            item.title.toLowerCase().includes(searchQuery.toLowerCase())
+          )
+        : [];
+
     return (
         <>
             <div className={`profile-menu-overlay ${isOpen ? 'open' : ''}`} onClick={onClose}></div>
             <div className={`profile-slide-menu ${isOpen ? 'open' : ''}`}>
                 <h2 className="profile-menu-title">Menu</h2>
-                <div className="profile-menu-divider"></div>
+                <div className="profile-menu-search">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    <input
+                        type="search"
+                        placeholder="Search tools & settings..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        autoComplete="off"
+                    />
+                </div>
 
-                <button className="profile-menu-item" onClick={() => { onNavigate('profile'); onClose(); }}>
-                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                    <span>Profile</span>
-                </button>
-                <button className="profile-menu-item" onClick={() => { onNavigate('data-privacy'); onClose(); }}>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-                    <span>Data & Privacy</span>
-                </button>
-                <button className="profile-menu-item" onClick={handleLogout}>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-                    <span>Logout</span>
-                </button>
-                
-                <div className="profile-menu-divider"></div>
+                {searchQuery.length > 0 ? (
+                    <div className="search-results-list">
+                        {filteredItems.length > 0 ? (
+                            filteredItems.map(item => (
+                                <button
+                                    key={item.title}
+                                    className="profile-menu-item"
+                                    onClick={() => {
+                                        onNavigate(item.page, item.params);
+                                        onClose();
+                                    }}
+                                >
+                                    {item.icon}
+                                    <span>{item.title}</span>
+                                </button>
+                            ))
+                        ) : (
+                            <p className="no-results-message">No results found.</p>
+                        )}
+                    </div>
+                ) : (
+                    <>
+                        <div className="profile-menu-divider"></div>
+                        <button className="profile-menu-item" onClick={() => { onNavigate('profile'); onClose(); }}>
+                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                            <span>Profile</span>
+                        </button>
+                        <button className="profile-menu-item" onClick={() => { onNavigate('data-privacy'); onClose(); }}>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                            <span>Data & Privacy</span>
+                        </button>
+                        <button className="profile-menu-item" onClick={handleLogout}>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                            <span>Logout</span>
+                        </button>
+                        
+                        <div className="profile-menu-divider"></div>
 
-                <h3 className="profile-menu-subtitle">SUPPORT</h3>
-                <a href="mailto:yourjourneyyourtools@gmail.com" className="profile-menu-item">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-                    <span>Email Us</span>
-                </a>
-                <a href="https://discord.gg/ESyruxKb" target="_blank" rel="noopener noreferrer" className="profile-menu-item">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-                    <span>Join our Discord</span>
-                </a>
-                <button className="profile-menu-item" onClick={() => { onNavigate('known-bugs'); onClose(); }}>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H9.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/><path d="m12 6-1 2-2 1 2 1 1 2 1-2 2-1-2-1z"/></svg>
-                    <span>Known Bugs</span>
-                </button>
+                        <h3 className="profile-menu-subtitle">SUPPORT</h3>
+                        <a href="mailto:yourjourneyyourtools@gmail.com" className="profile-menu-item">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                            <span>Email Us</span>
+                        </a>
+                        <a href="https://discord.gg/ESyruxKb" target="_blank" rel="noopener noreferrer" className="profile-menu-item">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                            <span>Join our Discord</span>
+                        </a>
+                        <button className="profile-menu-item" onClick={() => { onNavigate('known-bugs'); onClose(); }}>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H9.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/><path d="m12 6-1 2-2 1 2 1 1 2 1-2 2-1-2-1z"/></svg>
+                            <span>Known Bugs</span>
+                        </button>
+                    </>
+                )}
             </div>
         </>
     );
@@ -3468,9 +3384,7 @@ const TrackerHubPage = ({ onBack, onNavigate }) => {
             <p className="app-subtitle">Select a tool to log your activities and goals.</p>
           </div>
 
-          <SobrietyClock size="large" onNavigate={onNavigate} />
-
-          <div className="card-grid home-grid" style={{maxWidth: '800px', marginTop: '2rem'}}>
+          <div className="card-grid home-grid" style={{maxWidth: '800px'}}>
             {cards.map((card) => (
               <button
                 key={card.title}
@@ -3490,6 +3404,87 @@ const TrackerHubPage = ({ onBack, onNavigate }) => {
   );
 };
 
+// --- Toolkit Page Component ---
+const ToolkitPage = ({ onBack, onNavigate }) => {
+    const [isWheelOpen, setIsWheelOpen] = useState(false);
+
+    const toolCategories = [
+        {
+            title: 'For a Calm Moment',
+            description: 'Techniques for immediate relief and mindfulness.',
+            tools: [
+                { title: 'Breathing Exercise', page: 'breathing-exercise', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg> },
+                { title: 'The 5-4-3-2-1 Method', page: 'five-four-three-two-one', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M7 20h10" /><path d="M10 20v-6l-2-2a3 3 0 0 1-2-2.8V8.2a3 3 0 0 1 2-2.8l2-1.2a3 3 0 0 1 3.2 0l2 1.2a3 3 0 0 1 2 2.8v1a3 3 0 0 1-2 2.8l-2 2v6" /></svg> },
+                { title: 'Guided Audio', page: 'guided-audio', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg> },
+                { title: 'Feelings Explorer', action: () => setIsWheelOpen(true), icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><path d="M8 15h8"></path><line x1="9" y1="10" x2="9.01" y2="10"></line><line x1="15" y1="10" x2="15.01" y2="10"></line></svg> },
+            ]
+        },
+        {
+            title: 'For Deeper Reflection',
+            description: 'Exercises for self-discovery and changing thought patterns.',
+            tools: [
+                { title: 'Values Exercise', page: 'values-exercise', params: { initialStep: 'deck-selection' }, icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg> },
+                { title: 'The Thought Triangle', page: 'thought-triangle', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 2L2 21h20L12 2z"></path></svg> },
+                { title: 'Three Good Things', page: 'three-good-things', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg> },
+            ]
+        },
+        {
+            title: 'For Healthy Habits',
+            description: 'Tools for building routines and self-assessment.',
+            tools: [
+                { title: 'Wind-Down Routine', page: 'wind-down-toolkit', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg> },
+                { title: 'AUDIT Alcohol Screen', page: 'audit-test', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M14.5 2H9.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"></path><line x1="12" y1="18" x2="12.01" y2="18"></line></svg> },
+            ]
+        }
+    ];
+
+    return (
+        <div className="page-container">
+            {isWheelOpen && (
+                <FeelingsWheel 
+                    onFeelingSelect={() => setIsWheelOpen(false)}
+                    onClose={() => setIsWheelOpen(false)}
+                    confirmText="Done Exploring"
+                />
+            )}
+            <div className="content-with-side-button">
+                <div className="side-button-wrapper">
+                    <button onClick={onBack} className="home-button" aria-label="Go back to home">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                        <span>Home</span>
+                    </button>
+                </div>
+                <main>
+                    <div className="page-header-text">
+                        <h1 className="app-title">Your Toolkit</h1>
+                        <p className="app-subtitle">A collection of exercises to support your well-being.</p>
+                    </div>
+                    <div className="toolkit-categories">
+                        {toolCategories.map(category => (
+                            <div key={category.title} className="card toolkit-category-card">
+                                <h2 className="toolkit-category-title">{category.title}</h2>
+                                <p className="toolkit-category-description">{category.description}</p>
+                                <div className="card-grid toolkit-grid">
+                                    {category.tools.map(tool => (
+                                        <button 
+                                            key={tool.title} 
+                                            className="card" 
+                                            onClick={() => tool.page ? onNavigate(tool.page, tool.params) : tool.action()}
+                                        >
+                                            {tool.icon}
+                                            <h3 className="card-title" style={{fontSize: '1.2rem'}}>{tool.title}</h3>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </main>
+            </div>
+        </div>
+    );
+};
+
 
 // --- Home Page Component ---
 const HomePage = ({ onNavigate, username }) => {
@@ -3498,8 +3493,7 @@ const HomePage = ({ onNavigate, username }) => {
     const homeCards = [
         { title: 'Your Journey', page: 'journey', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M17 5C11 11 11 21 17 19 13 17 13 7 17 5Z"></path></svg>, size: 'large' },
         { title: 'Tracker', page: 'tracker-hub', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> },
-        { title: 'Know Yourself', page: 'know-yourself', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> },
-        { title: 'Grounding', page: 'grounding', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"></path><path d="M12 13v8"></path><path d="M9 21h6"></path></svg> },
+        { title: 'Toolkit', page: 'toolkit', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg> },
         { title: 'Media', page: 'media', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> },
     ];
 
@@ -3518,12 +3512,13 @@ const HomePage = ({ onNavigate, username }) => {
                 </button>
             </header>
 
-            <main>
+            <main className="home-main">
+                <SobrietyClock size="large" onNavigate={onNavigate} />
                 <div className="card-grid home-grid">
                     {homeCards.map((card) => (
                         <button
                             key={card.page}
-                            className={`card ${card.size === 'large' ? 'journey-card' : 'small-card'}`}
+                            className={`card ${card.size === 'large' ? 'journey-card' : ''}`}
                             onClick={() => onNavigate(card.page)}
                             aria-label={card.title}
                         >
@@ -3609,18 +3604,26 @@ const App = () => {
                 return <TrackerHubPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
             case 'tracker':
                 return <TrackerPage onBack={() => handleNavigation('tracker-hub')} />;
-            case 'know-yourself':
-                return <KnowYourselfPage onBack={() => handleNavigation('home')} initialStep={pageParams?.initialStep || 'intro'} />;
+            case 'toolkit':
+                 return <ToolkitPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
+            case 'values-exercise':
+                return <ValuesExercisePage onBack={() => handleNavigation('toolkit')} initialStep={pageParams?.initialStep || 'deck-selection'} />;
+            case 'audit-test':
+                return <AuditTestPage onBack={() => handleNavigation('toolkit')} />;
+            case 'three-good-things':
+                return <ThreeGoodThingsPage onBack={() => handleNavigation('toolkit')} />;
+            case 'wind-down-toolkit':
+                return <WindDownToolkitPage onBack={() => handleNavigation('toolkit')} />;
+            case 'thought-triangle':
+                return <ThoughtTrianglePage onBack={() => handleNavigation('toolkit')} />;
             case 'media':
                 return <MediaPage onBack={() => handleNavigation('home')} />;
-            case 'grounding':
-                return <GroundingPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
             case 'five-four-three-two-one':
-                return <FiveFourThreeTwoOnePage onBack={() => handleNavigation('grounding')} onHome={() => handleNavigation('home')} />;
+                return <FiveFourThreeTwoOnePage onBack={() => handleNavigation('toolkit')} onHome={() => handleNavigation('home')} />;
             case 'breathing-exercise':
-                return <BreathingExercisePage onBack={() => handleNavigation('grounding')} onHome={() => handleNavigation('home')} />;
+                return <BreathingExercisePage onBack={() => handleNavigation('toolkit')} onHome={() => handleNavigation('home')} />;
             case 'guided-audio':
-                return <GuidedAudioPage onBack={() => handleNavigation('grounding')} onHome={() => handleNavigation('home')}/>;
+                return <GuidedAudioPage onBack={() => handleNavigation('toolkit')} onHome={() => handleNavigation('home')}/>;
             case 'journey':
                  return <JourneyPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
             case 'goals':
