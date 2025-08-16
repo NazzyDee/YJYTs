@@ -7,10 +7,21 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI } from "@google/genai";
 
-// TypeScript declaration for Google Analytics gtag function
+// TypeScript declaration for Google Analytics gtag function and non-standard browser APIs
 declare global {
     interface Window {
         gtag?: (command: string, actionOrId: string, params?: { [key: string]: any }) => void;
+    }
+    interface Navigator {
+        standalone?: boolean;
+    }
+    interface ServiceWorkerRegistration {
+        readonly periodicSync: PeriodicSyncManager;
+    }
+    interface PeriodicSyncManager {
+        register(tag: string, options?: { minInterval: number }): Promise<void>;
+        unregister(tag: string): Promise<void>;
+        getTags(): Promise<string[]>;
     }
 }
 
@@ -34,6 +45,7 @@ const LoginPage = ({ onLoginSuccess }) => {
     const [setupStage, setSetupStage] = useState('login'); // 'login', 'createPin', 'confirmPin', 'createUsername'
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [confirmDeleteText, setConfirmDeleteText] = useState('');
+    const [showPrivacyModal, setShowPrivacyModal] = useState(false);
 
     useEffect(() => {
         const storedPin = localStorage.getItem('userPIN');
@@ -96,7 +108,7 @@ const LoginPage = ({ onLoginSuccess }) => {
                 if (pin === firstPinAttempt) {
                     setPin('');
                     setError('');
-                    setSetupStage('createUsername');
+                    setShowPrivacyModal(true); // Show privacy modal before username creation
                 } else {
                     setError('PINs do not match. Please start over.');
                     setPin('');
@@ -123,6 +135,11 @@ const LoginPage = ({ onLoginSuccess }) => {
         localStorage.removeItem('goals');
         setShowConfirmModal(false);
         window.location.reload(); // Reload the app to reset its state
+    };
+    
+    const handlePrivacyAccept = () => {
+        setShowPrivacyModal(false);
+        setSetupStage('createUsername');
     };
 
     if (setupStage === 'createUsername') {
@@ -235,6 +252,23 @@ const LoginPage = ({ onLoginSuccess }) => {
                                 Confirm Deletion
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+            
+            {showPrivacyModal && (
+                <div className="confirm-modal-overlay">
+                    <div className="confirm-modal-content card" style={{textAlign: 'left', alignItems: 'flex-start'}}>
+                        <h3 style={{color: 'var(--accent-teal)', alignSelf: 'center'}}>Data Privacy & Storage</h3>
+                         <p style={{ lineHeight: 1.7 }}>
+                           Your data, including journal entries and goals, is saved directly in your browser's local storage. This means your information is private to you and is not sent to any server.
+                         </p>
+                         <p style={{ lineHeight: 1.7, fontWeight: 600, color: 'var(--orange-accent)' }}>
+                           To ensure your data persists, it is highly recommended to use the same browser and device for this application. Clearing your browser's cache or data may permanently delete all your saved information.
+                         </p>
+                         <div className="confirm-modal-actions" style={{justifyContent: 'center', marginTop: '1rem'}}>
+                             <button onClick={handlePrivacyAccept} className="modal-button" style={{backgroundColor: 'var(--accent-teal)', color: 'var(--bg-dark)'}}>Okay</button>
+                         </div>
                     </div>
                 </div>
             )}
@@ -655,6 +689,22 @@ const TrackerPage = ({ onBack }) => {
     
     const entryDate = new Date();
     entryDate.setDate(entryDate.getDate() + dayOffset);
+
+    // Set the time correctly from the time input
+    if (time) { // time is "HH:mm"
+        const [hours, minutes] = time.split(':');
+        entryDate.setHours(parseInt(hours, 10));
+        entryDate.setMinutes(parseInt(minutes, 10));
+        entryDate.setSeconds(0);
+        entryDate.setMilliseconds(0);
+    } else {
+        // If no time is provided, use the current time of logging
+        const now = new Date();
+        entryDate.setHours(now.getHours());
+        entryDate.setMinutes(now.getMinutes());
+        entryDate.setSeconds(now.getSeconds());
+    }
+    
     const formattedDate = entryDate.toLocaleDateString('en-AU');
 
     const newLog = {
@@ -706,9 +756,9 @@ const TrackerPage = ({ onBack }) => {
        )}
       <div className="content-with-side-button">
         <div className="side-button-wrapper">
-            <button onClick={onBack} className="home-button" aria-label="Go back to home">
-               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-               <span>Home</span>
+            <button onClick={onBack} className="home-button" aria-label="Go back">
+               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+               <span>Back</span>
             </button>
         </div>
         <main className="tracker-content">
@@ -1936,6 +1986,35 @@ const KnownBugsPage = ({ onBack }) => {
   );
 };
 
+// --- Data Privacy Page Component ---
+const DataPrivacyPage = ({ onBack }) => {
+  return (
+    <div className="page-container">
+      <div className="content-with-side-button">
+        <div className="side-button-wrapper">
+          <button onClick={onBack} className="home-button" aria-label="Go back to home">
+             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+             <span>Home</span>
+          </button>
+        </div>
+        <main>
+          <div className="page-header-text">
+            <h1 className="app-title">Data Privacy & Storage</h1>
+          </div>
+          <div className="card" style={{ textAlign: 'left', alignItems: 'flex-start', gap: '1.5rem' }}>
+            <p style={{ lineHeight: 1.7 }}>
+              Your data, including journal entries and goals, is saved directly in your browser's local storage. This means your information is private to you and is not sent to any server.
+            </p>
+            <p style={{ lineHeight: 1.7, fontWeight: 600, color: 'var(--orange-accent)' }}>
+              To ensure your data persists, it is highly recommended to use the same browser and device for this application. Clearing your browser's cache or data may permanently delete all your saved information.
+            </p>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+};
+
 // --- Profile Page Component ---
 const ProfilePage = ({ onBack }) => {
     const [profile, setProfile] = useState({ username: '', gender: '', dob: '' });
@@ -2184,7 +2263,7 @@ Based on these entries, please provide a brief, insightful summary in 2-3 short 
                     </div>
                 )}
                 <div className="confirm-modal-actions" style={{justifyContent: 'center'}}>
-                    <button onClick={onClose} className="modal-button" style={{backgroundColor: 'var(--accent-teal)', color: 'var(--bg-dark)', flex: 'none', minWidth: '120px'}}>
+                    <button onClick={onClose} className="modal-button" style={{backgroundColor: 'var(--orange-accent)', color: 'var(--bg-dark)', flex: 'none', minWidth: '120px'}}>
                         Close
                     </button>
                 </div>
@@ -2252,133 +2331,90 @@ const JourneyPage = ({ onBack, onNavigate }) => {
                     if (Object.keys(unitCounts).length > 0) {
                         mostCommonUnit = Object.keys(unitCounts).reduce((a, b) => unitCounts[a] > unitCounts[b] ? a : b);
                     }
-
-                    const last7FilteredByUnit = last7MostFrequent.filter(e => e.amountUnit && e.amountUnit.trim() === mostCommonUnit);
                     
+                    const totalAmountLast7Days = last7MostFrequent.reduce((sum, entry) => sum + (entry.amountValue || 0), 0);
+                    const avgDailyAmountLast7Days = totalAmountLast7Days / 7;
+
                     const prev7DaysEntries = history.filter(entry => {
                         const entryDate = new Date(entry.entryTimestamp || entry.id);
-                        return entryDate < sevenDaysAgo && entryDate >= fourteenDaysAgo;
+                        return entryDate < sevenDaysAgo && entryDate >= fourteenDaysAgo && entry.substance === mostFrequentSubstance;
                     });
-                    const prev7FilteredBySubstanceAndUnit = prev7DaysEntries.filter(e => e.substance === mostFrequentSubstance && e.amountUnit && e.amountUnit.trim() === mostCommonUnit);
 
-                    const totalAmountLast7 = last7FilteredByUnit.reduce((sum, entry) => sum + (Number(entry.amountValue) || 0), 0);
-                    const totalAmountPrev7 = prev7FilteredBySubstanceAndUnit.reduce((sum, entry) => sum + (Number(entry.amountValue) || 0), 0);
+                    const totalAmountPrev7Days = prev7DaysEntries.reduce((sum, entry) => sum + (entry.amountValue || 0), 0);
+                    const avgDailyAmountPrev7Days = totalAmountPrev7Days / 7;
 
-                    let trend = null;
-                    if (totalAmountPrev7 > 0) {
-                        const change = ((totalAmountLast7 - totalAmountPrev7) / totalAmountPrev7) * 100;
-                        trend = Math.round(change);
+                    let change = null;
+                    if (avgDailyAmountPrev7Days > 0) {
+                        change = ((avgDailyAmountLast7Days - avgDailyAmountPrev7Days) / avgDailyAmountPrev7Days) * 100;
                     }
 
                     setTrackerStats({
-                        totalEntries: last7DaysEntries.length,
-                        mostFrequentSubstance: mostFrequentSubstance,
-                        totalAmount: totalAmountLast7.toLocaleString(undefined, {maximumFractionDigits: 2}),
-                        mostCommonUnit: mostCommonUnit,
-                        trend: trend,
-                        isNewFormat: true,
-                    });
-
-                } else { // Fallback for old data format
-                    const prev7DaysEntries = history.filter(entry => {
-                        const entryDate = new Date(entry.id);
-                        return entryDate < sevenDaysAgo && entryDate >= fourteenDaysAgo;
-                    });
-
-                    let trend = null;
-                    if (prev7DaysEntries.length > 0) {
-                        const change = ((last7DaysEntries.length - prev7DaysEntries.length) / prev7DaysEntries.length) * 100;
-                        trend = Math.round(change);
-                    }
-
-                    const substanceCounts = last7DaysEntries.reduce((acc, entry) => {
-                        acc[entry.substance] = (acc[entry.substance] || 0) + 1;
-                        return acc;
-                    }, {});
-                    const mostFrequentSubstance = Object.keys(substanceCounts).reduce((a, b) => substanceCounts[a] > substanceCounts[b] ? a : b);
-                    
-                    setTrackerStats({
-                        totalEntries: last7DaysEntries.length,
-                        mostFrequent: mostFrequentSubstance,
-                        trend: trend,
-                        isNewFormat: false,
+                        mostFrequentSubstance,
+                        mostCommonUnit,
+                        totalAmountLast7Days,
+                        avgDailyAmountLast7Days,
+                        change,
                     });
                 }
-            } else {
-                setTrackerStats({ totalEntries: 0 });
             }
         } catch (error) {
-            console.error("Could not process tracker history", error);
-            setTrackerStats(null);
+            console.error("Could not process tracker data", error);
         }
 
         // Process Grounding Data
         try {
-            const savedGroundingHistory = localStorage.getItem('groundingHistory');
-            const groundingHistory = savedGroundingHistory ? JSON.parse(savedGroundingHistory) : [];
+            const savedHistory = localStorage.getItem('groundingHistory');
+            const history = savedHistory ? JSON.parse(savedHistory) : [];
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
             
-            let mostFrequentTechnique = 'N/A';
-            if (groundingHistory.length > 0) {
-                const techniqueCounts = groundingHistory.reduce((acc, entry) => {
-                    acc[entry.technique] = (acc[entry.technique] || 0) + 1;
-                    return acc;
-                }, {});
-                mostFrequentTechnique = Object.keys(techniqueCounts).reduce((a, b) => techniqueCounts[a] > techniqueCounts[b] ? a : b);
+            const last7DaysCount = history.filter(item => new Date(item.date) >= sevenDaysAgo).length;
+
+            if (history.length > 0) {
+                setGroundingStats({
+                    totalCount: history.length,
+                    last7DaysCount: last7DaysCount,
+                    lastUsed: new Date(history[0].date).toLocaleDateString(),
+                });
             }
-
-            setGroundingStats({
-                totalSessions: groundingHistory.length,
-                mostUsed: mostFrequentTechnique,
-                lastUsed: groundingHistory.length > 0 ? new Date(groundingHistory[0].date).toLocaleDateString() : 'N/A'
-            });
         } catch (error) {
-            console.error("Could not process grounding history", error);
+            console.error("Could not process grounding data", error);
         }
-
-        // Process Goals Data
+        
+        // Process Goal Data
         try {
             const savedGoals = localStorage.getItem('goals');
             const goals = savedGoals ? JSON.parse(savedGoals) : [];
-            const activeGoals = goals.filter(g => g.status === 'in-progress');
-            const completedGoals = goals.filter(g => g.status === 'completed');
+            const activeGoals = goals.filter(g => !g.completed);
 
-            let avgProgress = 0;
             if (activeGoals.length > 0) {
                 const totalProgress = activeGoals.reduce((sum, goal) => {
-                    const progress = (goal.currentProgress / goal.measurableTarget) * 100;
-                    return sum + progress;
+                    const progress = (goal.currentValue / goal.targetValue) * 100;
+                    return sum + Math.min(progress, 100); // Cap progress at 100%
                 }, 0);
-                avgProgress = Math.round(totalProgress / activeGoals.length);
+                const averageProgress = totalProgress / activeGoals.length;
+                setGoalStats({
+                    activeGoalsCount: activeGoals.length,
+                    averageProgress: Math.round(averageProgress),
+                });
             }
-            
-            setGoalStats({
-                active: activeGoals.length,
-                completed: completedGoals.length,
-                avgProgress: activeGoals.length > 0 ? avgProgress : null
-            });
-
         } catch (error) {
-            console.error("Could not process goals history", error);
+            console.error("Could not process goal data", error);
         }
 
         setIsLoading(false);
     }, []);
 
-    // Helper to render trend
-    const renderTrend = (trend) => {
-        if (trend === null) return <span className="stat-value muted">Not enough data</span>;
-        const trendClass = trend >= 0 ? 'positive' : 'negative';
-        const trendIcon = trend >= 0 ? '▲' : '▼';
-        return <span className={`stat-value ${trendClass}`}>{trendIcon} {Math.abs(trend)}%</span>;
-    };
-
     if (isLoading) {
-        return <div className="page-container" style={{display: 'flex', justifyContent: 'center', alignItems: 'center'}}><div className="spinner"></div></div>;
+        return (
+            <div className="page-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '80vh' }}>
+                <div className="spinner"></div>
+            </div>
+        );
     }
-
+    
     return (
         <div className="page-container">
-            {isSummaryModalOpen && <AISummaryModal onClose={() => setIsSummaryModalOpen(false)} />}
             <div className="content-with-side-button">
                 <div className="side-button-wrapper">
                     <button onClick={onBack} className="home-button" aria-label="Go back to home">
@@ -2389,1065 +2425,791 @@ const JourneyPage = ({ onBack, onNavigate }) => {
                 <main className="journey-content">
                     <div className="page-header-text">
                         <h1 className="app-title">Your Journey</h1>
-                        <p className="app-subtitle">A summary of your progress and insights.</p>
+                        <p className="app-subtitle">An overview of your progress and insights.</p>
                     </div>
 
-                    <div className="journey-grid">
-                        {/* Core Values Card */}
-                        <div className="summary-card card">
+                    <div className="card-grid journey-grid">
+                        <SobrietyClock size="small" onNavigate={onNavigate} />
+                        <div className="card summary-card">
                             <h2 className="summary-card-title">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>
-                                <span>My Core Values</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                                <span>Core Values</span>
                             </h2>
                             {coreValues.length > 0 ? (
-                                <>
-                                    <div className="values-summary-grid">
-                                        {coreValues.map(value => <div key={value.title} className="value-chip">{value.title}</div>)}
-                                    </div>
-                                    <button onClick={() => onNavigate('values-exercise')} className="summary-card-cta">Explore My Values</button>
-                                </>
+                                <div className="values-summary-grid">
+                                    {coreValues.map(value => <span key={value.title} className="value-chip">{value.title}</span>)}
+                                </div>
                             ) : (
                                 <div className="no-data-placeholder">
-                                    <p>Discover your core values to see them here.</p>
-                                    <button onClick={() => onNavigate('values-exercise')} className="exercise-nav-button">Start Values Exercise</button>
+                                    <p>You haven't identified your core values yet. Discovering them can provide a compass for your journey.</p>
+                                    <button onClick={() => onNavigate('know-yourself', { initialStep: 'deck-selection' })} className="exercise-nav-button">
+                                        Find Your Values
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="card summary-card">
+                            <h2 className="summary-card-title">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
+                                <span>Tracker Insights</span>
+                            </h2>
+                            <p className="summary-card-subtitle">Last 7 Days vs. Previous 7 Days</p>
+                            {trackerStats ? (
+                                <div className="stats-container">
+                                    <div className="stat-item">
+                                        <span className="stat-label">Most Frequent</span>
+                                        <span className="stat-value">{trackerStats.mostFrequentSubstance}</span>
+                                    </div>
+                                    <div className="stat-item">
+                                        <span className="stat-label">Total Amount</span>
+                                        <span className="stat-value">{trackerStats.totalAmountLast7Days.toFixed(1)} {trackerStats.mostCommonUnit}</span>
+                                    </div>
+                                    <div className="stat-item">
+                                        <span className="stat-label">Daily Average</span>
+                                        <span className="stat-value">{trackerStats.avgDailyAmountLast7Days.toFixed(1)} {trackerStats.mostCommonUnit}</span>
+                                    </div>
+                                    <div className="stat-item">
+                                        <span className="stat-label">Change</span>
+                                        <span className={`stat-value ${trackerStats.change > 0 ? 'negative' : 'positive'}`}>
+                                            {trackerStats.change !== null ? `${trackerStats.change > 0 ? '+' : ''}${trackerStats.change.toFixed(0)}%` : 'N/A'}
+                                        </span>
+                                    </div>
+                                    <button className="ai-cta" onClick={() => setIsSummaryModalOpen(true)}>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                                        <span>Generate AI Summary</span>
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="no-data-placeholder">
+                                    <p>Not enough data for insights. Log your feelings and use for at least a week to see patterns.</p>
+                                    <button onClick={() => onNavigate('tracker')} className="exercise-nav-button">
+                                        Go to Tracker
+                                    </button>
                                 </div>
                             )}
                         </div>
                         
-                        {/* Goal Progress Card */}
-                        <div className="summary-card card">
+                        <div className="card summary-card">
+                            <h2 className="summary-card-title">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 16.5c-2.1 2.1-2.1 5.6 0 7.7 2.1 2.1 5.6 2.1 7.7 0l1.4-1.4c.5-.5.5-1.2 0-1.7l-5.3-5.3c-.5-.5-1.2-.5-1.7 0l-2.1 2.1z"/><path d="m19.5 2.5 2-2"/><path d="m16.5 5.5 2-2"/><path d="m13.5 8.5 2-2"/><path d="M19 10c-2.8 2.8-5.6 4.2-8.4 4.2-2.8 0-5.6-1.4-8.4-4.2"/></svg>
+                                <span>Grounding Exercises</span>
+                            </h2>
+                            {groundingStats ? (
+                                <div className="stats-container">
+                                    <div className="stat-item">
+                                        <span className="stat-label">Total Completed</span>
+                                        <span className="stat-value">{groundingStats.totalCount}</span>
+                                    </div>
+                                    <div className="stat-item">
+                                        <span className="stat-label">Last 7 Days</span>
+                                        <span className="stat-value">{groundingStats.last7DaysCount}</span>
+                                    </div>
+                                     <div className="stat-item">
+                                        <span className="stat-label">Last Used</span>
+                                        <span className="stat-value">{groundingStats.lastUsed}</span>
+                                    </div>
+                                </div>
+                            ) : (
+                               <div className="no-data-placeholder">
+                                    <p>Grounding exercises help in moments of stress. Try one to start building your history.</p>
+                                    <button onClick={() => onNavigate('grounding')} className="exercise-nav-button">
+                                        Explore Techniques
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="card summary-card">
                              <h2 className="summary-card-title">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
-                                <span>Goal Progress</span>
+                                <span>Goals</span>
                             </h2>
-                            {goalStats && (goalStats.active > 0 || goalStats.completed > 0) ? (
-                                <>
-                                    <div className="stats-container">
-                                        <div className="stat-item">
-                                            <span className="stat-label">Active Goals</span>
-                                            <span className="stat-value">{goalStats.active}</span>
-                                        </div>
-                                        <div className="stat-item">
-                                            <span className="stat-label">Completed Goals</span>
-                                            <span className="stat-value">{goalStats.completed}</span>
-                                        </div>
-                                        {goalStats.avgProgress !== null && (
-                                            <div className="stat-item">
-                                                <span className="stat-label">Average Progress</span>
-                                                <span className="stat-value">{goalStats.avgProgress}%</span>
-                                            </div>
-                                        )}
+                             {goalStats ? (
+                                <div className="stats-container">
+                                    <div className="stat-item">
+                                        <span className="stat-label">Active Goals</span>
+                                        <span className="stat-value">{goalStats.activeGoalsCount}</span>
                                     </div>
-                                    <button onClick={() => onNavigate('goals')} className="summary-card-cta">Manage My Goals</button>
-                                </>
-                            ) : (
-                                <div className="no-data-placeholder">
-                                    <p>Set a new goal to track your progress here.</p>
-                                    <button onClick={() => onNavigate('goals')} className="exercise-nav-button">Set a Goal</button>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Tracker Summary Card */}
-                        <div className="summary-card card">
-                            <h2 className="summary-card-title">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
-                                <span>Tracker Activity</span>
-                            </h2>
-                            <p className="summary-card-subtitle">Last 7 Days</p>
-                            {trackerStats && trackerStats.totalEntries > 0 ? (
-                                <>
-                                    <div className="stats-container">
-                                        {trackerStats.isNewFormat ? (
-                                            <>
-                                                <div className="stat-item">
-                                                    <span className="stat-label">Log Entries</span>
-                                                    <span className="stat-value">{trackerStats.totalEntries}</span>
-                                                </div>
-                                                <div className="stat-item">
-                                                    <span className="stat-label">Total Use ({trackerStats.mostFrequentSubstance})</span>
-                                                    <span className="stat-value">{trackerStats.totalAmount} {trackerStats.mostCommonUnit}</span>
-                                                </div>
-                                                <div className="stat-item">
-                                                    <span className="stat-label">Amount Trend vs. Prior 7 Days</span>
-                                                    {renderTrend(trackerStats.trend)}
-                                                </div>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <div className="stat-item">
-                                                    <span className="stat-label">Total Entries</span>
-                                                    <span className="stat-value">{trackerStats.totalEntries}</span>
-                                                </div>
-                                                <div className="stat-item">
-                                                    <span className="stat-label">Most Tracked</span>
-                                                    <span className="stat-value">{trackerStats.mostFrequent}</span>
-                                                </div>
-                                                <div className="stat-item">
-                                                    <span className="stat-label">Trend vs. Prior 7 Days</span>
-                                                    {renderTrend(trackerStats.trend)}
-                                                </div>
-                                            </>
-                                        )}
+                                    <div className="stat-item">
+                                        <span className="stat-label">Average Progress</span>
+                                        <span className="stat-value">{goalStats.averageProgress}%</span>
                                     </div>
-                                    <button onClick={() => onNavigate('daily-journal')} className="summary-card-cta">View All Tracker History</button>
-                                    <button onClick={() => setIsSummaryModalOpen(true)} className="summary-card-cta ai-cta">
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.6l1.2 3.6H17l-3 2.2l1.2 3.6l-3-2.2l-3 2.2l1.2-3.6l-3-2.2h3.8zM6 16.4l1.2 3.6H11l-3 2.2l1.2 3.6l-3-2.2l-3 2.2l1.2-3.6l-3-2.2h3.8zm12 0l1.2 3.6H23l-3 2.2l1.2 3.6l-3-2.2l-3 2.2l1.2-3.6l-3-2.2h3.8z"/></svg>
-                                        <span>Get AI Summary</span>
+                                    <button onClick={() => onNavigate('goals')} className="summary-card-cta" style={{width: '100%', textAlign: 'center', marginTop: '1rem'}}>
+                                        View & Update Goals
                                     </button>
-                                </>
-                            ) : (
-                                <div className="no-data-placeholder">
-                                    <p>Log your activities to see a summary here.</p>
-                                    <button onClick={() => onNavigate('daily-journal')} className="exercise-nav-button">Go to Tracker</button>
                                 </div>
-                            )}
-                        </div>
-
-                        {/* Grounding Tools Card */}
-                        <div className="summary-card card">
-                             <h2 className="summary-card-title">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20.94 13.06A8.998 8.998 0 0 0 13.06 5.06 9 9 0 0 0 5.06 13.06C5.53 16.32 7.51 19 12 19a9.002 9.002 0 0 0 8.94-5.94z"></path><path d="M12 21a9 9 0 0 0 9-9h-9v9z"></path></svg>
-                                <span>Grounding Tools</span>
-                            </h2>
-                             <p className="summary-card-subtitle">Your Go-To Techniques</p>
-                            {groundingStats && groundingStats.totalSessions > 0 ? (
-                                <>
-                                    <div className="stats-container">
-                                        <div className="stat-item">
-                                            <span className="stat-label">Total Sessions</span>
-                                            <span className="stat-value">{groundingStats.totalSessions}</span>
-                                        </div>
-                                        <div className="stat-item">
-                                            <span className="stat-label">Most Used</span>
-                                            <span className="stat-value">{groundingStats.mostUsed}</span>
-                                        </div>
-                                        <div className="stat-item">
-                                            <span className="stat-label">Last Used</span>
-                                            <span className="stat-value">{groundingStats.lastUsed}</span>
-                                        </div>
-                                    </div>
-                                    <button onClick={() => onNavigate('grounding')} className="summary-card-cta">Explore Grounding Techniques</button>
-                                </>
                             ) : (
-                                <div className="no-data-placeholder">
-                                    <p>Use grounding tools to see your usage stats.</p>
-                                    <button onClick={() => onNavigate('grounding')} className="exercise-nav-button">Find a Tool</button>
+                               <div className="no-data-placeholder">
+                                    <p>Setting goals aligned with your values can be a powerful driver for change.</p>
+                                    <button onClick={() => onNavigate('goals')} className="exercise-nav-button">
+                                        Set a New Goal
+                                    </button>
                                 </div>
                             )}
                         </div>
                     </div>
                 </main>
             </div>
+             {isSummaryModalOpen && <AISummaryModal onClose={() => setIsSummaryModalOpen(false)} />}
         </div>
     );
 };
 
-
-// --- Goals Feature: Create Goal Page ---
-const CreateGoalPage = ({ onBack, onNavigate }) => {
-    const [specific, setSpecific] = useState('');
-    const [measurableTarget, setMeasurableTarget] = useState('');
-    const [measurableUnit, setMeasurableUnit] = useState('');
-    const [achievable, setAchievable] = useState('');
-    const [relevant, setRelevant] = useState('');
-    const [timeBound, setTimeBound] = useState('');
-    const [coreValues, setCoreValues] = useState([]);
-    const [reminderEnabled, setReminderEnabled] = useState(false);
-    const [reminderTime, setReminderTime] = useState('09:00');
+// --- Goals Page Component ---
+const GoalsPage = ({ onBack }) => {
+    const [goals, setGoals] = useState([]);
+    const [view, setView] = useState('dashboard'); // 'dashboard', 'create'
+    const [activeTab, setActiveTab] = useState('active'); // 'active', 'completed'
+    const [logProgressGoal, setLogProgressGoal] = useState(null);
+    const [logValue, setLogValue] = useState('');
 
     useEffect(() => {
         try {
-            const savedValues = localStorage.getItem('coreValues');
-            if (savedValues) {
-                setCoreValues(JSON.parse(savedValues));
-            }
-        } catch (e) {
-            console.error("Could not load core values", e);
-        }
-    }, []);
-
-    const handleReminderToggle = async (e) => {
-        const isChecked = e.target.checked;
-        if (isChecked) {
-            if (Notification.permission === 'denied') {
-                alert("You've previously denied notification permissions. Please enable them in your browser settings to use this feature.");
-                return;
-            }
-            if (Notification.permission === 'default') {
-                const permission = await Notification.requestPermission();
-                if (permission !== 'granted') {
-                    alert("Permission was not granted. Reminders cannot be set.");
-                    return; // Don't enable if permission is not granted
-                }
-            }
-        }
-        setReminderEnabled(isChecked);
-    };
-
-    const handleSave = () => {
-        if (!specific || !measurableTarget || !measurableUnit || !timeBound) {
-            alert('Please fill out Specific, Measurable, and Time-bound fields.');
-            return;
-        }
-
-        const newGoal = {
-            id: Date.now(),
-            specific: specific.trim(),
-            measurableTarget: parseInt(measurableTarget, 10),
-            measurableUnit: measurableUnit.trim(),
-            currentProgress: 0,
-            achievable: achievable.trim(),
-            relevant: relevant.trim(),
-            timeBound,
-            status: 'in-progress',
-            reminderEnabled,
-            reminderTime,
-        };
-
-        try {
-            const existingGoals = JSON.parse(localStorage.getItem('goals') || '[]');
-            localStorage.setItem('goals', JSON.stringify([newGoal, ...existingGoals]));
-            trackEvent('create_goal', 'Goals', newGoal.specific);
-            onNavigate('goals');
-        } catch (e) {
-            console.error("Could not save goal", e);
-        }
-    };
-    
-    const isSaveDisabled = !specific || !measurableTarget || !measurableUnit || !timeBound;
-
-    return (
-        <div className="page-container">
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back to goals dashboard">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                        <span>Back</span>
-                    </button>
-                </div>
-                <main>
-                    <div className="page-header-text">
-                        <h1 className="app-title">Create a New Goal</h1>
-                        <p className="app-subtitle">Define your goal using the SMART framework.</p>
-                    </div>
-
-                    <div className="create-goal-form">
-                        <div className="form-section card">
-                            <h3 className="form-section-title"><span>S</span>pecific</h3>
-                            <p className="form-section-description">What is your goal? Be as clear and specific as possible.</p>
-                            <input type="text" placeholder="e.g., Exercise 3 times a week" value={specific} onChange={e => setSpecific(e.target.value)} />
-                        </div>
-
-                        <div className="form-section card">
-                            <h3 className="form-section-title"><span>M</span>easurable</h3>
-                            <p className="form-section-description">How will you measure your progress? Define a target and a unit.</p>
-                            <div className="measurable-inputs">
-                                <input type="number" placeholder="e.g., 12" value={measurableTarget} onChange={e => setMeasurableTarget(e.target.value)} />
-                                <input type="text" placeholder="e.g., workouts" value={measurableUnit} onChange={e => setMeasurableUnit(e.target.value)} />
-                            </div>
-                        </div>
-
-                        <div className="form-section card">
-                            <h3 className="form-section-title"><span>A</span>chievable</h3>
-                            <p className="form-section-description">Is this goal realistic for you right now? (Optional)</p>
-                            <textarea placeholder="e.g., I have free time in the evenings and can start with walking." value={achievable} onChange={e => setAchievable(e.target.value)}></textarea>
-                        </div>
-                        
-                        <div className="form-section card">
-                            <h3 className="form-section-title"><span>R</span>elevant</h3>
-                            <p className="form-section-description">Why is this goal important to you? How does it align with your values? (Optional)</p>
-                            {coreValues.length > 0 && (
-                                <div className="values-suggestion-container">
-                                    <p>Your core values:</p>
-                                    <div className="values-summary-grid">
-                                        {coreValues.map(v => <div key={v.title} className="value-chip">{v.title}</div>)}
-                                    </div>
-                                </div>
-                            )}
-                            <textarea placeholder="e.g., This aligns with my value of Health and will improve my mood." value={relevant} onChange={e => setRelevant(e.target.value)}></textarea>
-                        </div>
-
-                        <div className="form-section card">
-                            <h3 className="form-section-title"><span>T</span>ime-bound</h3>
-                            <p className="form-section-description">When will you achieve this goal by?</p>
-                            <input type="date" value={timeBound} onChange={e => setTimeBound(e.target.value)} />
-                        </div>
-                        
-                        <div className="form-section card reminder-section">
-                            <h3 className="form-section-title">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                                <span>Notifications</span>
-                            </h3>
-                            <div className="reminder-toggle">
-                                <label htmlFor="reminder-enabled">Set daily reminder for this goal?</label>
-                                <input id="reminder-enabled" type="checkbox" checked={reminderEnabled} onChange={handleReminderToggle} />
-                            </div>
-                            {reminderEnabled && (
-                                <div className="reminder-time-input">
-                                    <label htmlFor="reminder-time">Reminder time:</label>
-                                    <input id="reminder-time" type="time" value={reminderTime} onChange={e => setReminderTime(e.target.value)} style={{colorScheme: 'dark'}} />
-                                </div>
-                            )}
-                        </div>
-
-                        <button onClick={handleSave} className="exercise-nav-button" disabled={isSaveDisabled}>
-                            Save Goal
-                        </button>
-                    </div>
-                </main>
-            </div>
-        </div>
-    );
-};
-
-// --- Goals Feature: Main Dashboard Page ---
-const GoalsPage = ({ onBack, onNavigate }) => {
-    const [goals, setGoals] = useState([]);
-    const [activeTab, setActiveTab] = useState('in-progress'); // 'in-progress' or 'completed'
-    const [logModalState, setLogModalState] = useState({ isOpen: false, goal: null });
-
-    const loadGoals = () => {
-        try {
             const savedGoals = localStorage.getItem('goals');
             setGoals(savedGoals ? JSON.parse(savedGoals) : []);
-        } catch (e) {
-            console.error("Could not load goals", e);
-            setGoals([]);
-        }
-    };
-    
-    useEffect(loadGoals, []);
-    
-    const updateGoals = (updatedGoals) => {
-        setGoals(updatedGoals);
-        localStorage.setItem('goals', JSON.stringify(updatedGoals));
+        } catch (e) { console.error("Could not load goals", e); }
+    }, []);
+
+    const saveGoals = (newGoals) => {
+        setGoals(newGoals);
+        try {
+            localStorage.setItem('goals', JSON.stringify(newGoals));
+        } catch (e) { console.error("Could not save goals", e); }
     };
 
-    const handleLogProgress = (goalId, amount) => {
-        const updatedGoals = goals.map(goal => {
-            if (goal.id === goalId) {
-                const newProgress = Math.min(goal.measurableTarget, goal.currentProgress + amount);
-                return { ...goal, currentProgress: newProgress };
+    const handleCreateGoal = (goalData) => {
+        const newGoal = {
+            id: Date.now(),
+            ...goalData,
+            createdAt: new Date().toISOString(),
+            currentValue: 0,
+            completed: false,
+            completedAt: null,
+        };
+        saveGoals([newGoal, ...goals]);
+        setView('dashboard');
+        trackEvent('create_goal', 'Goals', goalData.title);
+    };
+    
+    const handleLogProgress = () => {
+        const updatedGoals = goals.map(g => {
+            if (g.id === logProgressGoal.id) {
+                const newValue = g.currentValue + parseFloat(logValue);
+                return { ...g, currentValue: Math.min(newValue, g.targetValue) };
             }
-            return goal;
+            return g;
         });
-        updateGoals(updatedGoals);
-        setLogModalState({ isOpen: false, goal: null });
+        saveGoals(updatedGoals);
+        setLogProgressGoal(null);
+        setLogValue('');
+        trackEvent('log_progress', 'Goals', logProgressGoal.title, parseFloat(logValue));
     };
 
-    const handleMarkComplete = (goalId) => {
-        const updatedGoals = goals.map(goal => {
-            if (goal.id === goalId) {
-                trackEvent('complete_goal', 'Goals', goal.specific);
-                return { ...goal, status: 'completed', currentProgress: goal.measurableTarget };
+    const handleCompleteGoal = (goalId) => {
+        const updatedGoals = goals.map(g => {
+            if (g.id === goalId) {
+                return { ...g, completed: true, completedAt: new Date().toISOString(), currentValue: g.targetValue };
             }
-            return goal;
+            return g;
         });
-        updateGoals(updatedGoals);
+        saveGoals(updatedGoals);
+        trackEvent('complete_goal', 'Goals', goals.find(g => g.id === goalId).title);
     };
 
-    const GoalCard = ({ goal }) => {
-        const progressPercentage = Math.round((goal.currentProgress / goal.measurableTarget) * 100);
-        const isCompleted = goal.status === 'completed';
-        const dueDate = new Date(goal.timeBound);
-        // Add one day to dueDate because new Date('YYYY-MM-DD') creates a date at midnight UTC, which can appear as the previous day in some timezones.
-        dueDate.setDate(dueDate.getDate() + 1);
+    const CreateGoalForm = () => {
+        const [title, setTitle] = useState('');
+        const [targetValue, setTargetValue] = useState('');
+        const [unit, setUnit] = useState('');
+        const [deadline, setDeadline] = useState('');
+        const [reminderEnabled, setReminderEnabled] = useState(false);
+        const [reminderTime, setReminderTime] = useState('19:00');
 
-        return (
-            <div className={`goal-card card ${isCompleted ? 'completed' : ''}`}>
-                <h3 className="goal-title">{goal.specific}</h3>
-                
-                <div className="goal-progress-bar-container">
-                    <div className="goal-progress-bar" style={{ width: `${progressPercentage}%` }}></div>
-                </div>
-                
-                <div className="goal-metrics">
-                    <span className="progress-text">{progressPercentage}%</span>
-                    <span className="progress-numbers">{goal.currentProgress} / {goal.measurableTarget} {goal.measurableUnit}</span>
-                </div>
-
-                <div className="goal-meta">
-                  <p className="goal-due-date">Due: {dueDate.toLocaleDateString()}</p>
-                  {goal.reminderEnabled && !isCompleted && (
-                    <div className="goal-reminder-info">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                        <span>{goal.reminderTime}</span>
-                    </div>
-                  )}
-                </div>
-
-                {!isCompleted && (
-                    <div className="goal-actions">
-                        <button className="goal-action-button log" onClick={() => setLogModalState({ isOpen: true, goal: goal })}>Log Progress</button>
-                        <button className="goal-action-button complete" onClick={() => handleMarkComplete(goal.id)}>Mark Complete</button>
-                    </div>
-                )}
-                 {isCompleted && (
-                    <div className="goal-completed-badge">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                        <span>Completed!</span>
-                    </div>
-                )}
-            </div>
-        );
-    };
-    
-    const LogProgressModal = () => {
-        const [amount, setAmount] = useState(1);
-        if (!logModalState.isOpen) return null;
+        const isFormValid = title.trim() && targetValue.trim() && unit.trim();
 
         const handleSubmit = (e) => {
             e.preventDefault();
-            handleLogProgress(logModalState.goal.id, Number(amount));
-        }
+            if (!isFormValid) return;
+            handleCreateGoal({ title, targetValue: parseFloat(targetValue), unit, deadline, reminder: { enabled: reminderEnabled, time: reminderTime } });
+        };
 
         return (
-            <div className="confirm-modal-overlay">
-                <div className="confirm-modal-content card" onClick={e => e.stopPropagation()}>
-                    <h3>Log Progress for:</h3>
-                    <p className="log-progress-goal-title">{logModalState.goal.specific}</p>
-                    <form onSubmit={handleSubmit} className="log-progress-form">
-                        <label htmlFor="progress-amount">Amount to add:</label>
-                        <input
-                            id="progress-amount"
-                            type="number"
-                            value={amount}
-                            onChange={(e) => setAmount(Number(e.target.value))}
-                            min="1"
-                            step="1"
-                            autoFocus
-                        />
-                        <div className="confirm-modal-actions">
-                            <button type="button" onClick={() => setLogModalState({isOpen: false, goal: null})} className="modal-button cancel">Cancel</button>
-                            <button type="submit" className="modal-button confirm">Save</button>
-                        </div>
-                    </form>
+            <form className="create-goal-form" onSubmit={handleSubmit}>
+                <div className="card form-section">
+                    <h3 className="form-section-title">
+                        <span>1</span> What is your goal?
+                    </h3>
+                    <p className="form-section-description">Make it specific. Instead of "exercise more," try "run 10km a week."</p>
+                    <div className="form-group">
+                        <label htmlFor="goal-title">Goal Title</label>
+                        <input id="goal-title" type="text" placeholder="e.g., Run 10km per week" value={title} onChange={e => setTitle(e.target.value)} autoFocus />
+                    </div>
                 </div>
-            </div>
-        )
-    }
 
-    const filteredGoals = goals.filter(g => g.status === activeTab);
+                <div className="card form-section">
+                    <h3 className="form-section-title">
+                        <span>2</span> How will you measure it?
+                    </h3>
+                    <p className="form-section-description">This should be a number. If your goal is to run 10km, the target is 10 and the unit is "km".</p>
+                    <div className="measurable-inputs">
+                        <div className="form-group">
+                            <label htmlFor="goal-target">Target</label>
+                            <input id="goal-target" type="number" placeholder="e.g., 10" value={targetValue} onChange={e => setTargetValue(e.target.value)} />
+                        </div>
+                        <div className="form-group">
+                            <label htmlFor="goal-unit">Unit</label>
+                            <input id="goal-unit" type="text" placeholder="e.g., km" value={unit} onChange={e => setUnit(e.target.value)} />
+                        </div>
+                    </div>
+                </div>
+                
+                 <div className="card form-section">
+                    <h3 className="form-section-title">
+                        <span>3</span> What is the deadline?
+                    </h3>
+                     <p className="form-section-description">Setting a target date helps create urgency. This is optional but recommended.</p>
+                     <div className="form-group">
+                        <label htmlFor="goal-deadline">Target Date (Optional)</label>
+                        <input id="goal-deadline" type="date" value={deadline} onChange={e => setDeadline(e.target.value)} style={{colorScheme: 'dark'}}/>
+                    </div>
+                </div>
+
+                <div className="card form-section reminder-section">
+                    <h3 className="form-section-title">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                        <span>Set a Reminder</span>
+                    </h3>
+                    <div className="reminder-toggle">
+                        <label htmlFor="goal-reminder-enabled">Remind me to log my progress</label>
+                        <input id="goal-reminder-enabled" type="checkbox" checked={reminderEnabled} onChange={e => setReminderEnabled(e.target.checked)} />
+                    </div>
+                    {reminderEnabled && (
+                        <div className="reminder-time-input">
+                            <label htmlFor="goal-reminder-time">Reminder time:</label>
+                            <input id="goal-reminder-time" type="time" value={reminderTime} onChange={e => setReminderTime(e.target.value)} style={{colorScheme: 'dark'}} />
+                        </div>
+                    )}
+                </div>
+
+                <button type="submit" className="log-button" disabled={!isFormValid}>Create Goal</button>
+            </form>
+        );
+    };
+
+    const activeGoals = goals.filter(g => !g.completed);
+    const completedGoals = goals.filter(g => g.completed);
+    const goalsToShow = activeTab === 'active' ? activeGoals : completedGoals;
 
     return (
         <div className="page-container">
-            {logModalState.isOpen && <LogProgressModal />}
+            {logProgressGoal && (
+                 <div className="confirm-modal-overlay" onClick={() => setLogProgressGoal(null)}>
+                    <div className="confirm-modal-content card" onClick={e => e.stopPropagation()}>
+                        <h3>Log Progress</h3>
+                        <p className="log-progress-goal-title">{logProgressGoal.title}</p>
+                        
+                        <div className="log-progress-form">
+                            <label htmlFor="log-value">How many {logProgressGoal.unit} did you complete?</label>
+                            <input
+                                id="log-value"
+                                type="number"
+                                value={logValue}
+                                onChange={(e) => setLogValue(e.target.value)}
+                                autoFocus
+                            />
+                        </div>
+                        
+                        <div className="confirm-modal-actions" style={{marginTop: '1.5rem'}}>
+                            <button onClick={() => setLogProgressGoal(null)} className="modal-button cancel">Cancel</button>
+                            <button onClick={handleLogProgress} className="modal-button confirm" style={{backgroundColor: 'var(--accent-teal)'}} disabled={!logValue || parseFloat(logValue) <= 0}>
+                                Save Progress
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             <div className="content-with-side-button">
                 <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back to home">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                        <span>Home</span>
+                    <button onClick={view === 'create' ? () => setView('dashboard') : onBack} className="home-button" aria-label="Go back">
+                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+                         <span>{view === 'create' ? 'Back to Goals' : 'Back'}</span>
                     </button>
                 </div>
                 <main className="goals-dashboard">
                     <div className="page-header-text">
-                        <h1 className="app-title">My Goals</h1>
-                        <p className="app-subtitle">Track and manage your personal objectives.</p>
+                        <h1 className="app-title">{view === 'create' ? 'Create a New Goal' : 'Your Goals'}</h1>
+                        <p className="app-subtitle">{view === 'create' ? 'Follow the steps to set a SMART goal.' : 'Track your progress and celebrate your achievements.'}</p>
                     </div>
-                    
-                    <button onClick={() => onNavigate('create-goal')} className="create-goal-button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                        <span>Create New Goal</span>
-                    </button>
 
-                    <div className="goals-tabs">
-                        <button className={`goals-tab-button ${activeTab === 'in-progress' ? 'active' : ''}`} onClick={() => setActiveTab('in-progress')}>
-                            In Progress ({goals.filter(g => g.status === 'in-progress').length})
-                        </button>
-                        <button className={`goals-tab-button ${activeTab === 'completed' ? 'active' : ''}`} onClick={() => setActiveTab('completed')}>
-                            Completed ({goals.filter(g => g.status === 'completed').length})
-                        </button>
-                    </div>
-                    
-                    <div className="goals-grid">
-                        {filteredGoals.length > 0 ? (
-                            filteredGoals.map(goal => <GoalCard key={goal.id} goal={goal} />)
-                        ) : (
-                            <div className="no-data-placeholder">
-                                <p>You have no {activeTab === 'in-progress' ? 'active' : 'completed'} goals yet.</p>
-                                {activeTab === 'in-progress' && <button onClick={() => onNavigate('create-goal')} className="exercise-nav-button">Set Your First Goal</button>}
+                    {view === 'dashboard' && (
+                        <>
+                            <button className="create-goal-button" onClick={() => setView('create')}>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                <span>Set a New Goal</span>
+                            </button>
+
+                            <div className="goals-tabs">
+                                <button className={`goals-tab-button ${activeTab === 'active' ? 'active' : ''}`} onClick={() => setActiveTab('active')}>
+                                    Active ({activeGoals.length})
+                                </button>
+                                <button className={`goals-tab-button ${activeTab === 'completed' ? 'active' : ''}`} onClick={() => setActiveTab('completed')}>
+                                    Completed ({completedGoals.length})
+                                </button>
                             </div>
-                        )}
-                    </div>
+
+                            {goalsToShow.length > 0 ? (
+                                <div className="goals-grid">
+                                    {goalsToShow.map(goal => {
+                                        const progress = Math.min((goal.currentValue / goal.targetValue) * 100, 100);
+                                        return (
+                                            <div key={goal.id} className={`card goal-card ${goal.completed ? 'completed' : ''}`}>
+                                                <h3 className="goal-title">{goal.title}</h3>
+                                                <div className="goal-progress-bar-container">
+                                                    <div className="goal-progress-bar" style={{ width: `${progress}%` }}></div>
+                                                </div>
+                                                <div className="goal-metrics">
+                                                    <span className="progress-text">{progress.toFixed(0)}% Complete</span>
+                                                    <span className="progress-numbers">{goal.currentValue.toFixed(1)} / {goal.targetValue.toFixed(1)} {goal.unit}</span>
+                                                </div>
+                                                {(goal.deadline || (goal.reminder && goal.reminder.enabled)) && (
+                                                    <div className="goal-meta">
+                                                        <span>{goal.deadline ? `Due: ${new Date(goal.deadline).toLocaleDateString()}` : ''}</span>
+                                                        {goal.reminder && goal.reminder.enabled && (
+                                                            <span className="goal-reminder-info">
+                                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                                                                {goal.reminder.time}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {!goal.completed ? (
+                                                    <div className="goal-actions">
+                                                        <button className="goal-action-button log" onClick={() => setLogProgressGoal(goal)}>Log Progress</button>
+                                                        <button className="goal-action-button complete" onClick={() => handleCompleteGoal(goal.id)}>Mark Complete</button>
+                                                    </div>
+                                                ) : (
+                                                    <div className="goal-completed-badge">
+                                                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                                        <span>Completed on {new Date(goal.completedAt).toLocaleDateString()}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="no-data-placeholder" style={{padding: '3rem 1rem'}}>
+                                    <p>No {activeTab} goals yet. Let's set one up!</p>
+                                </div>
+                            )}
+                        </>
+                    )}
+                    
+                    {view === 'create' && <CreateGoalForm />}
+
                 </main>
             </div>
         </div>
     );
 };
 
-// --- Sobriety Counter Component ---
-const SobrietyCounter = () => {
-    const [timeSober, setTimeSober] = useState(null);
-    const [lastEntry, setLastEntry] = useState(null);
-    const [isLoading, setIsLoading] = useState(true);
+// --- Sobriety Clock Component ---
+const SobrietyClock = ({ size = 'large', onNavigate }) => {
+    const [displayValue, setDisplayValue] = useState(0);
+    const [displayUnit, setDisplayUnit] = useState('Seconds');
+    const [startTime, setStartTime] = useState(null);
 
     useEffect(() => {
-        try {
-            const savedHistory = localStorage.getItem('journalHistory');
-            const history = savedHistory ? JSON.parse(savedHistory) : [];
-            if (history.length > 0) {
-                // Sort by entryTimestamp (or fallback to id for older data) to find the most recent event
-                const latest = history.sort((a, b) => (b.entryTimestamp || b.id) - (a.entryTimestamp || a.id))[0];
-                setLastEntry(latest);
-            }
-        } catch (error) {
-            console.error("Could not parse journal history for sobriety clock", error);
-        } finally {
-            setIsLoading(false);
-        }
-    }, []);
-
-    useEffect(() => {
-        if (!lastEntry) return;
-
-        const calculateTime = () => {
-            const now = new Date();
-            const lastUseDate = new Date(lastEntry.entryTimestamp || lastEntry.id);
-            if(lastEntry.time) {
-                const [h, m] = lastEntry.time.split(':');
-                lastUseDate.setHours(h, m, 0, 0);
-            }
+        let isMounted = true;
+        
+        const setupClock = () => {
+            const storedHistory = localStorage.getItem('journalHistory');
+            const history = storedHistory ? JSON.parse(storedHistory) : [];
+            const lastEntryTime = history.length > 0 && history[0].entryTimestamp ? history[0].entryTimestamp : null;
             
-            if (lastUseDate > now) {
-                setTimeSober(null);
-                return;
+            if (isMounted) {
+                setStartTime(lastEntryTime);
             }
 
-            let diff = now.getTime() - lastUseDate.getTime();
-            let tempDate = new Date(lastUseDate);
-            let months = 0;
-            while(true) {
-                let nextMonthDate = new Date(tempDate);
-                nextMonthDate.setMonth(nextMonthDate.getMonth() + 1);
-                if (nextMonthDate > now) break;
-                tempDate = nextMonthDate;
-                months++;
+            if (lastEntryTime) {
+                const interval = setInterval(() => {
+                    if (!isMounted) return;
+
+                    const now = Date.now();
+                    const diff = now - lastEntryTime;
+                    
+                    if (diff < 0) {
+                        setDisplayValue(0);
+                        setDisplayUnit('Seconds');
+                        return;
+                    }
+
+                    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+                    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+                    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+                    const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+                    
+                    if (days > 0) {
+                        setDisplayValue(days);
+                        setDisplayUnit(days === 1 ? 'Day' : 'Days');
+                    } else if (hours > 0) {
+                        setDisplayValue(hours);
+                        setDisplayUnit(hours === 1 ? 'Hour' : 'Hours');
+                    } else if (minutes > 0) {
+                        setDisplayValue(minutes);
+                        setDisplayUnit(minutes === 1 ? 'Minute' : 'Minutes');
+                    } else {
+                        setDisplayValue(seconds);
+                        setDisplayUnit(seconds === 1 ? 'Second' : 'Seconds');
+                    }
+                }, 1000);
+
+                return () => {
+                    isMounted = false;
+                    clearInterval(interval);
+                };
             }
-            
-            let remainingDiff = now.getTime() - tempDate.getTime();
-            const daysAfterMonths = Math.floor(remainingDiff / (1000 * 60 * 60 * 24));
-            const weeks = Math.floor(daysAfterMonths / 7);
-            const days = daysAfterMonths % 7;
-
-            const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-            const minutes = Math.floor((diff / (1000 * 60)) % 60);
-
-            setTimeSober({ months, weeks, days, hours, minutes });
         };
 
-        calculateTime(); // Initial calculation
-        const interval = setInterval(calculateTime, 60000); // Update every minute
+        const cleanup = setupClock();
 
-        return () => clearInterval(interval);
-    }, [lastEntry]);
+        return () => { 
+            isMounted = false;
+            if (cleanup) cleanup();
+        };
+    }, []);
 
-    if (isLoading) {
-        return null; // Don't show anything while loading
-    }
-
-    if (!lastEntry) {
+    if (!startTime) {
         return (
-            <div className="card sobriety-counter-card">
-                 <h2 className="summary-card-title" style={{justifyContent: 'center'}}>Sobriety Clock</h2>
-                 <div className="no-data-placeholder" style={{padding: '1rem', background: 'transparent', border: 'none'}}>
-                    <p>Make your first journal entry to start the clock.</p>
-                </div>
+            <div className="card sobriety-clock-card-placeholder">
+                <h2 className="card-title">Sobriety Clock</h2>
+                <p className="card-description">Make your first journal entry to start the clock.</p>
             </div>
         );
     }
     
-    if (!timeSober) {
-        return null; // Return null if date is in the future or not calculated yet
-    }
-    
-    const parts = [
-        { label: 'Months', value: timeSober.months },
-        { label: 'Weeks', value: timeSober.weeks },
-        { label: 'Days', value: timeSober.days },
-        { label: 'Hours', value: timeSober.hours },
-        { label: 'Minutes', value: timeSober.minutes },
-    ];
-    
-    const displayParts = parts.filter(p => p.value > 0);
-
     return (
-        <div className="card sobriety-counter-card">
-            <h2 className="summary-card-title" style={{justifyContent: 'center'}}>
-                You have been sober for
-            </h2>
-            <div className="sobriety-time-display">
-                {displayParts.length > 0 ? (
-                    displayParts.map(part => (
-                        <div className="time-part" key={part.label}>
-                            <span>{String(part.value).padStart(2, '0')}</span>
-                            <label>{part.label}</label>
-                        </div>
-                    ))
-                ) : (
-                     <div className="time-part">
-                        <span>--</span>
-                        <label>Just Started</label>
-                    </div>
-                )}
-            </div>
+        <div className="card sobriety-clock-card no-hover">
+             <h2 className="sobriety-clock-title">You have been sober for</h2>
+             <div className="sobriety-time-box">
+                <span className="sobriety-time-value">{displayValue}</span>
+                <span className="sobriety-time-unit">{displayUnit}</span>
+             </div>
         </div>
     );
 };
 
 
+// --- Profile Menu Component ---
+const ProfileMenu = ({ isOpen, onClose, onNavigate }) => {
+    const handleLogout = () => {
+        if (window.confirm("Are you sure you want to log out?")) {
+            window.location.reload();
+        }
+    };
+
+    return (
+        <>
+            <div className={`profile-menu-overlay ${isOpen ? 'open' : ''}`} onClick={onClose}></div>
+            <div className={`profile-slide-menu ${isOpen ? 'open' : ''}`}>
+                <h2 className="profile-menu-title">Menu</h2>
+                <div className="profile-menu-divider"></div>
+
+                <button className="profile-menu-item" onClick={() => { onNavigate('profile'); onClose(); }}>
+                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                    <span>Profile</span>
+                </button>
+                <button className="profile-menu-item" onClick={() => { onNavigate('data-privacy'); onClose(); }}>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                    <span>Data & Privacy</span>
+                </button>
+                <button className="profile-menu-item" onClick={handleLogout}>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                    <span>Logout</span>
+                </button>
+                
+                <div className="profile-menu-divider"></div>
+
+                <h3 className="profile-menu-subtitle">SUPPORT</h3>
+                <a href="mailto:yourjourneyyourtools@gmail.com" className="profile-menu-item">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                    <span>Email Us</span>
+                </a>
+                <a href="https://discord.gg/ESyruxKb" target="_blank" rel="noopener noreferrer" className="profile-menu-item">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                    <span>Join our Discord</span>
+                </a>
+                <button className="profile-menu-item" onClick={() => { onNavigate('known-bugs'); onClose(); }}>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H9.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/><path d="m12 6-1 2-2 1 2 1 1 2 1-2 2-1-2-1z"/></svg>
+                    <span>Known Bugs</span>
+                </button>
+            </div>
+        </>
+    );
+};
+
+
+// --- PWA Install Banner Component ---
+const InstallBanner = () => {
+    const [isIOS, setIsIOS] = useState(false);
+    const [isStandalone, setIsStandalone] = useState(false);
+    const [showBanner, setShowBanner] = useState(true);
+
+    useEffect(() => {
+        // Check if the app is running in standalone mode (added to home screen)
+        if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
+            setIsStandalone(true);
+        }
+        // Check if the user is on an iOS device
+        const userAgent = window.navigator.userAgent.toLowerCase();
+        setIsIOS(/iphone|ipad|ipod/.test(userAgent));
+    }, []);
+
+    const handleDismiss = () => {
+        setShowBanner(false);
+        try {
+            sessionStorage.setItem('installBannerDismissed', 'true');
+        } catch(e) { console.error("Could not set session storage for banner", e); }
+    };
+
+    const isDismissed = sessionStorage.getItem('installBannerDismissed') === 'true';
+
+    // Don't show the banner if:
+    // - it's already installed (standalone)
+    // - it's not an iOS device (Android/Desktop have their own install prompts)
+    // - the user has dismissed it in the current session
+    // - the user has closed it
+    if (isStandalone || !isIOS || isDismissed || !showBanner) {
+        return null;
+    }
+
+    return (
+        <div className="install-banner">
+            <p>For the best experience, add this app to your Home Screen. Tap the Share icon, then 'Add to Home Screen'.</p>
+            <button onClick={handleDismiss} className="install-button" style={{background: 'transparent', color: 'var(--bg-dark)', padding: 0}}>Dismiss</button>
+        </div>
+    );
+};
+
 // --- Tracker Hub Page Component ---
 const TrackerHubPage = ({ onBack, onNavigate }) => {
-  const hubCards = [
-    { 
-      title: 'Daily Journal', 
-      page: 'daily-journal',
-      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>,
+  const cards = [
+    {
+      title: 'Daily Journal',
+      page: 'tracker',
+      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>,
       description: 'Log your mood and substance use to gain insight.'
     },
-    { 
+    {
       title: 'Goals',
       page: 'goals',
-      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>,
+      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>,
       description: 'Set and track SMART goals to shape your journey.'
-    },
+    }
   ];
 
   return (
     <div className="page-container">
       <div className="content-with-side-button">
         <div className="side-button-wrapper">
-            <button onClick={onBack} className="home-button" aria-label="Go back to home">
-               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-               <span>Home</span>
-            </button>
+          <button onClick={onBack} className="home-button" aria-label="Go back to home">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+            <span>Home</span>
+          </button>
         </div>
         <main>
-           <div className="page-header-text">
-              <h1 className="app-title">Track Your Progress</h1>
-              <p className="app-subtitle">Select a tool to log your activities and goals.</p>
-           </div>
-           <div className="card-grid">
-            <SobrietyCounter />
-            {hubCards.map((card) => (
-                <button
+          <div className="page-header-text">
+            <h1 className="app-title">Track Your Progress</h1>
+            <p className="app-subtitle">Select a tool to log your activities and goals.</p>
+          </div>
+
+          <SobrietyClock size="large" onNavigate={onNavigate} />
+
+          <div className="card-grid home-grid" style={{maxWidth: '800px', marginTop: '2rem'}}>
+            {cards.map((card) => (
+              <button
                 key={card.title}
                 className="card"
                 onClick={() => onNavigate(card.page)}
                 aria-label={card.title}
-                >
+              >
                 {card.icon}
                 <h2 className="card-title">{card.title}</h2>
-                {card.description && <p className="card-description">{card.description}</p>}
-                </button>
+                <p className="card-description">{card.description}</p>
+              </button>
             ))}
-           </div>
+          </div>
         </main>
       </div>
     </div>
   );
 };
 
-// --- Install Banner Component ---
-const InstallBanner = ({ onInstallClick }) => {
-    return (
-        <div className="install-banner" role="region" aria-label="Install App Banner">
-            <p>Install this app to get the full experience, including offline access and helpful notifications.</p>
-            <button onClick={onInstallClick} className="install-button">Install Now</button>
-        </div>
-    );
-};
-
 
 // --- Home Page Component ---
-const HomePage = ({ onNavigate, onLogout, onShowDisclaimer, installPromptEvent, onInstallClick }) => {
-  const [username, setUsername] = useState('');
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
+const HomePage = ({ onNavigate, username }) => {
+    const [isMenuOpen, setIsMenuOpen] = useState(false);
 
-  useEffect(() => {
-    // New logic to handle userProfile object and migrate old data
-    const storedProfileRaw = localStorage.getItem('userProfile');
-    if (storedProfileRaw) {
-      try {
-        const storedProfile = JSON.parse(storedProfileRaw);
-        if (storedProfile.username) {
-          setUsername(storedProfile.username);
-        }
-      } catch (e) {
-        console.error("Failed to parse user profile, falling back.", e);
-        // Fallback for corrupted data
-        const oldUsername = localStorage.getItem('username');
-        if (oldUsername) setUsername(oldUsername);
-      }
-    } else {
-      // Migration for users who only have the old 'username' key
-      const oldUsername = localStorage.getItem('username');
-      if (oldUsername) {
-        setUsername(oldUsername);
-        const newProfile = { username: oldUsername, gender: '', dob: '' };
-        localStorage.setItem('userProfile', JSON.stringify(newProfile));
-      }
-    }
-  }, []);
+    const homeCards = [
+        { title: 'Your Journey', page: 'journey', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M5 21C10 15 16 10 21 3c-1 5-4 9-9 13s-7 5-7 5z"></path></svg>, size: 'large' },
+        { title: 'Tracker', page: 'tracker-hub', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> },
+        { title: 'Know Yourself', page: 'know-yourself', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> },
+        { title: 'Grounding', page: 'grounding', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"></path><path d="M12 13v8"></path><path d="M9 21h6"></path></svg> },
+        { title: 'Media', page: 'media', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> },
+    ];
 
-  const cards = [
-    { title: 'Your Journey', page: 'journey', enabled: true, icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg> },
-    { title: 'Tracker', page: 'tracker', enabled: true, icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> },
-    { title: 'Know Yourself', page: 'know-yourself', enabled: true, icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> },
-    { title: 'Grounding', page: 'grounding', enabled: true, icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M7 20h10" /><path d="M10 20v-6l-2-2a3 3 0 0 1-2-2.8V8.2a3 3 0 0 1 2-2.8l2-1.2a3 3 0 0 1 3.2 0l2 1.2a3 3 0 0 1 2 2.8v1a3 3 0 0 1-2 2.8l-2 2v6" /></svg> },
-    { title: 'Media', page: 'media', enabled: true, icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> },
-  ];
-
-  return (
-    <div className="page-container">
-      <div className={`profile-menu-overlay ${isMenuOpen ? 'open' : ''}`} onClick={() => setIsMenuOpen(false)}></div>
-      <div className={`profile-slide-menu ${isMenuOpen ? 'open' : ''}`}>
-          <h2 className="profile-menu-title">Menu</h2>
-          <button className="profile-menu-item" onClick={() => { onNavigate('profile'); setIsMenuOpen(false); }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-              <span>Profile</span>
-          </button>
-           {installPromptEvent && (
-              <button className="profile-menu-item" onClick={() => { onInstallClick(); setIsMenuOpen(false); }}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                  <span>Install App</span>
-              </button>
-          )}
-          <button className="profile-menu-item" onClick={() => { onShowDisclaimer(); setIsMenuOpen(false); }}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-            <span>Data & Privacy</span>
-          </button>
-          <button className="profile-menu-item" onClick={() => { onLogout(); setIsMenuOpen(false); }}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-            <span>Logout</span>
-          </button>
-          <div className="profile-menu-divider"></div>
-          <h3 className="profile-menu-subtitle">Support</h3>
-          <a href="mailto:yourjourneyyourtools@gmail.com" className="profile-menu-item">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-            <span>Email Us</span>
-          </a>
-          <a href="https://discord.gg/Td5RcUev" target="_blank" rel="noopener noreferrer" className="profile-menu-item">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
-              <span>Join our Discord</span>
-          </a>
-          <button className="profile-menu-item" onClick={() => { onNavigate('known-bugs'); setIsMenuOpen(false); }}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v4"/><path d="m18 16 4-4"/><path d="m18 12 4 4"/><path d="M12 12h.01"/><path d="M8 12h.01"/><path d="M16 12h.01"/></svg>
-            <span>Known Bugs</span>
-          </button>
-      </div>
-
-      {installPromptEvent && <InstallBanner onInstallClick={onInstallClick} />}
-      
-      <header className="app-header">
-        <div className="header-content">
-            {username && <h2 className="welcome-message">Welcome, {username}!</h2>}
-            <div className="app-logo-container" style={{ marginBottom: '0', marginTop: username ? '1rem' : '0' }}>
-               <svg className="logo-graphic" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path d="M45,95 C40,75 60,65 50,45 C30,30 40,10 50,0 C60,10 70,30 50,45 C60,65 40,75 55,95 Z" fill="currentColor"/>
-               </svg>
-              <h1 className="logo-text">YOUR JOURNEY,<br />YOUR TOOLS</h1>
-            </div>
-        </div>
-        <button className="hamburger-menu" onClick={() => setIsMenuOpen(true)} aria-label="Open profile menu">
-            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-        </button>
-      </header>
-      <main>
-        <div className="card-grid home-grid">
-          {cards.map((card) => (
-            <button
-              key={card.title}
-              className={`card ${card.page === 'journey' ? 'journey-card' : 'small-card'} ${!card.enabled ? 'disabled' : ''}`.trim()}
-              disabled={!card.enabled}
-              onClick={() => {
-                  if (card.enabled) {
-                      onNavigate(card.page);
-                  }
-              }}
-              aria-label={card.title}
-            >
-              {card.icon}
-              <h2 className="card-title">{card.title}</h2>
-            </button>
-          ))}
-        </div>
-      </main>
-      <footer className="app-footer">
-        <a href="https://www.yourjourneyyourtools.com" target="_blank" rel="noopener noreferrer">www.yourjourneyyourtools.com</a>
-      </footer>
-    </div>
-  );
-};
-
-// --- Disclaimer Modal Component ---
-const DisclaimerModal = ({ onClose }) => {
     return (
-        <div className="confirm-modal-overlay">
-            <div className="confirm-modal-content card" style={{maxWidth: '500px'}}>
-                <h3>Data Privacy & Storage</h3>
-                <p style={{textAlign: 'left', color: 'var(--text-light)'}}>
-                    Your data, including journal entries and goals, is saved directly in your browser's local storage.
-                    This means your information is private to you and is not sent to any server.
-                    <br/><br/>
-                    To ensure your data persists, it is highly recommended to use the same browser and device for this application.
-                    Clearing your browser's data may permanently delete all your saved information.
-                </p>
-                <div className="confirm-modal-actions" style={{justifyContent: 'center'}}>
-                    <button onClick={onClose} className="modal-button" style={{backgroundColor: 'var(--accent-teal)', color: 'var(--bg-dark)', flex: 'none'}}>
-                        Okay
-                    </button>
+        <div className="page-container">
+            <InstallBanner />
+            <ProfileMenu isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} onNavigate={onNavigate} />
+
+            <header className="app-header">
+                <div className="header-content">
+                    <h1 className="welcome-message">Welcome, {username}!</h1>
+                    <p className="app-subtitle">Your Journey, Your Tools.</p>
                 </div>
-            </div>
+                 <button className="hamburger-menu" onClick={() => setIsMenuOpen(true)} aria-label="Open menu">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
+            </header>
+
+            <main>
+                <div className="card-grid home-grid">
+                    {homeCards.map((card) => (
+                        <button
+                            key={card.page}
+                            className={`card ${card.size === 'large' ? 'journey-card' : 'small-card'}`}
+                            onClick={() => onNavigate(card.page)}
+                            aria-label={card.title}
+                        >
+                            {card.icon}
+                            <h2 className="card-title">{card.title}</h2>
+                        </button>
+                    ))}
+                </div>
+            </main>
+
+            <footer className="app-footer">
+                <a href="https://www.yourjourneyyourtools.com" target="_blank" rel="noopener noreferrer">
+                    www.yourjourneyyourtools.com
+                </a>
+            </footer>
         </div>
     );
 };
 
-// --- Offline Indicator Component ---
-const OfflineIndicator = () => {
-    return (
-        <div className="offline-indicator" role="status" aria-live="polite">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="1" y1="1" x2="23" y2="23"></line>
-                <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.94"></path>
-                <path d="M5 12.94A10.94 10.94 0 0 1 7.28 11.06"></path>
-                <path d="M10.94 21.06A10.94 10.94 0 0 1 5 12.94"></path>
-                <path d="M19 12.94a10.94 10.94 0 0 1-5.94 8.12"></path>
-                <path d="M14.83 15.17A4 4 0 0 1 9.17 9.17"></path>
-                <line x1="12" y1="2" x2="12.01" y2="2"></line>
-            </svg>
-            <span>You are currently offline. Functionality may be limited.</span>
-        </div>
-    );
-};
 
-// Main Application Component that handles page routing
-const MainApp = ({ onLogout, installPromptEvent, onInstallClick }) => {
-  const [currentPage, setCurrentPage] = useState('home');
-  const [showDisclaimer, setShowDisclaimer] = useState(false);
-  const scheduledNotificationsRef = useRef(new Set());
-
-
-  useEffect(() => {
-    const disclaimerSeen = localStorage.getItem('disclaimerSeen');
-    if (!disclaimerSeen) {
-      setShowDisclaimer(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    // Track page views for Google Analytics.
-    if (window.gtag) {
-      window.gtag('config', 'G-6Z8H8CSDV1', {
-        page_path: `/${currentPage}`,
-        page_title: currentPage,
-      });
-    }
-
-    // Schedule notifications on app load/navigation
-    if ('Notification' in window && 'serviceWorker' in navigator && Notification.permission === 'granted') {
-        const scheduledItems = scheduledNotificationsRef.current;
-        navigator.serviceWorker.ready.then(registration => {
-            const now = new Date();
-
-            // --- Schedule Goal Reminders ---
-            try {
-                const goals = JSON.parse(localStorage.getItem('goals') || '[]');
-                const activeGoalsWithReminders = goals.filter(g => g.status === 'in-progress' && g.reminderEnabled);
-
-                activeGoalsWithReminders.forEach(goal => {
-                    if (scheduledItems.has(goal.id)) return; // Already scheduled in this session
-
-                    const [hours, minutes] = goal.reminderTime.split(':');
-                    const reminderDate = new Date();
-                    reminderDate.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
-
-                    if (reminderDate > now) {
-                        const timeout = reminderDate.getTime() - now.getTime();
-                        setTimeout(() => {
-                            registration.showNotification('Goal Reminder', {
-                                body: `Time to work on your goal: "${goal.specific}"`,
-                                icon: 'assets/icon-192x192.png',
-                                tag: `goal-${goal.id}-${new Date().toLocaleDateString()}` // Unique tag per day
-                            });
-                        }, timeout);
-                        scheduledItems.add(goal.id);
-                    }
-                });
-            } catch (e) {
-                console.error("Failed to schedule goal notifications:", e);
-            }
-
-            // --- Schedule Journal Reminder ---
-            try {
-                const journalSettingsRaw = localStorage.getItem('journalReminderSettings');
-                if (journalSettingsRaw && !scheduledItems.has('journal-reminder')) {
-                    const settings = JSON.parse(journalSettingsRaw);
-                    if (settings.enabled) {
-                         const [hours, minutes] = settings.time.split(':');
-                         const reminderDate = new Date();
-                         reminderDate.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
-
-                         if (reminderDate > now) {
-                             const timeout = reminderDate.getTime() - now.getTime();
-                             setTimeout(() => {
-                                 registration.showNotification('Daily Journal Reminder', {
-                                     body: `It's time for your daily journal entry!`,
-                                     icon: 'assets/icon-192x192.png',
-                                     tag: `journal-reminder-${new Date().toLocaleDateString()}` // Unique tag per day
-                                 });
-                             }, timeout);
-                             scheduledItems.add('journal-reminder');
-                         }
-                    }
-                }
-            } catch(e) {
-                console.error("Failed to schedule journal notification:", e);
-            }
-        });
-    }
-  }, [currentPage]);
-
-  const handleNavigate = (page) => {
-    window.scrollTo(0, 0); // Scroll to top on page change
-    setCurrentPage(page);
-  };
-
-  const handleLogout = () => {
-    // Note: We don't remove the PIN, just log the user out.
-    // Full data deletion is handled in the forgot pin flow.
-    setCurrentPage('home'); // Reset to home before logging out
-    onLogout();
-  };
-
-  const handleCloseDisclaimer = () => {
-      localStorage.setItem('disclaimerSeen', 'true');
-      setShowDisclaimer(false);
-  };
-  
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-
-  useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
-
-
-  const renderPage = () => {
-    switch (currentPage) {
-      case 'home':
-        return <HomePage onNavigate={handleNavigate} onLogout={handleLogout} onShowDisclaimer={() => setShowDisclaimer(true)} installPromptEvent={installPromptEvent} onInstallClick={onInstallClick} />;
-      case 'journey':
-        return <JourneyPage onBack={() => handleNavigate('home')} onNavigate={handleNavigate} />;
-      case 'tracker':
-        return <TrackerHubPage onBack={() => handleNavigate('home')} onNavigate={handleNavigate} />;
-      case 'daily-journal':
-        return <TrackerPage onBack={() => handleNavigate('tracker')} />;
-      case 'goals':
-        return <GoalsPage onBack={() => handleNavigate('tracker')} onNavigate={handleNavigate} />;
-      case 'create-goal':
-        return <CreateGoalPage onBack={() => handleNavigate('goals')} onNavigate={handleNavigate} />;
-      case 'know-yourself':
-        return <KnowYourselfPage onBack={() => handleNavigate('home')} />;
-      case 'values-exercise':
-        return <KnowYourselfPage onBack={() => handleNavigate('journey')} initialStep="deck-selection" />;
-      case 'grounding':
-        return <GroundingPage onBack={() => handleNavigate('home')} onNavigate={handleNavigate} />;
-      case 'five-four-three-two-one':
-        return <FiveFourThreeTwoOnePage onBack={() => handleNavigate('grounding')} onHome={() => handleNavigate('home')} />;
-      case 'breathing-exercise':
-        return <BreathingExercisePage onBack={() => handleNavigate('grounding')} onHome={() => handleNavigate('home')} />;
-       case 'guided-audio':
-        return <GuidedAudioPage onBack={() => handleNavigate('grounding')} onHome={() => handleNavigate('home')} />;
-      case 'media':
-        return <MediaPage onBack={() => handleNavigate('home')} />;
-      case 'profile':
-        return <ProfilePage onBack={() => handleNavigate('home')} />;
-      case 'known-bugs':
-        return <KnownBugsPage onBack={() => handleNavigate('home')} />;
-      default:
-        return <HomePage onNavigate={handleNavigate} onLogout={handleLogout} onShowDisclaimer={() => setShowDisclaimer(true)} installPromptEvent={installPromptEvent} onInstallClick={onInstallClick} />;
-    }
-  };
-
-  return (
-    <div className="app-container">
-      {!isOnline && <OfflineIndicator />}
-      {showDisclaimer && <DisclaimerModal onClose={handleCloseDisclaimer} />}
-      {renderPage()}
-    </div>
-  );
-};
-
-
+// --- Main App Component ---
 const App = () => {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [installPromptEvent, setInstallPromptEvent] = useState(null);
+    const [page, setPage] = useState('home');
+    const [pageParams, setPageParams] = useState(null);
+    const [isLoggedIn, setIsLoggedIn] = useState(false);
+    const [username, setUsername] = useState('There');
+    const [isOffline, setIsOffline] = useState(!navigator.onLine);
 
-  useEffect(() => {
-    // Check if there's a PIN to decide if we should show login
-    const storedPin = localStorage.getItem('userPIN');
-    if (storedPin) {
-      // If PIN exists, user needs to log in. Don't auto-login.
-      setIsLoggedIn(false); 
-    } else {
-      // No PIN means it's a first-time setup. The login page will handle this.
-      setIsLoggedIn(false);
-    }
-
-    const handleBeforeInstallPrompt = (event) => {
-      event.preventDefault(); // Prevent the default browser prompt
-      setInstallPromptEvent(event);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    };
-
-  }, []);
-
-  const handleLoginSuccess = () => {
-    setIsLoggedIn(true);
-  };
-  
-  const handleLogout = () => {
-      setIsLoggedIn(false);
-  }
-
-  const handleInstallClick = () => {
-    if (installPromptEvent) {
-      installPromptEvent.prompt();
-      installPromptEvent.userChoice.then((choiceResult) => {
-        if (choiceResult.outcome === 'accepted') {
-          console.log('User accepted the install prompt');
-           trackEvent('install_pwa', 'PWA', 'accepted');
-        } else {
-          console.log('User dismissed the install prompt');
-           trackEvent('install_pwa', 'PWA', 'dismissed');
+    useEffect(() => {
+        // Load username
+        const storedProfile = localStorage.getItem('userProfile');
+        if (storedProfile) {
+            try {
+                setUsername(JSON.parse(storedProfile).username || 'There');
+            } catch(e) { console.error("Could not parse user profile on load", e)}
         }
-        setInstallPromptEvent(null); // The prompt can only be used once
-      });
+        
+        // Handle online/offline status
+        const handleOnline = () => setIsOffline(false);
+        const handleOffline = () => setIsOffline(true);
+
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, [isLoggedIn]); // Re-check username when logged in
+    
+     useEffect(() => {
+        // Service Worker for Reminders and Offline Capability
+        if ('serviceWorker' in navigator && 'PeriodicSyncManager' in window.ServiceWorkerRegistration.prototype) {
+            navigator.serviceWorker.register('/service-worker.js')
+                .then(registration => {
+                    console.log('Service Worker registered with scope:', registration.scope);
+                    return registration.periodicSync.register('daily-reminder', {
+                        minInterval: 24 * 60 * 60 * 1000,
+                    });
+                })
+                .catch(error => console.log('Service Worker registration or periodic sync failed:', error));
+        } else if ('serviceWorker' in navigator) {
+             navigator.serviceWorker.register('/service-worker.js')
+                .then(registration => console.log('Service Worker registered with scope:', registration.scope))
+                .catch(error => console.log('Service Worker registration failed:', error));
+        }
+    }, []);
+
+    const handleNavigation = (targetPage: string, params: any = null) => {
+        setPage(targetPage);
+        setPageParams(params);
+        window.scrollTo(0, 0); // Scroll to top on page change
+        trackEvent('navigate', 'Navigation', targetPage);
+    };
+
+    if (!isLoggedIn) {
+        return <LoginPage onLoginSuccess={() => setIsLoggedIn(true)} />;
     }
-  };
 
-  if (!isLoggedIn) {
-    return <LoginPage onLoginSuccess={handleLoginSuccess} />;
-  }
+    const renderPage = () => {
+        switch (page) {
+            case 'tracker-hub':
+                return <TrackerHubPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
+            case 'tracker':
+                return <TrackerPage onBack={() => handleNavigation('tracker-hub')} />;
+            case 'know-yourself':
+                return <KnowYourselfPage onBack={() => handleNavigation('home')} initialStep={pageParams?.initialStep || 'intro'} />;
+            case 'media':
+                return <MediaPage onBack={() => handleNavigation('home')} />;
+            case 'grounding':
+                return <GroundingPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
+            case 'five-four-three-two-one':
+                return <FiveFourThreeTwoOnePage onBack={() => handleNavigation('grounding')} onHome={() => handleNavigation('home')} />;
+            case 'breathing-exercise':
+                return <BreathingExercisePage onBack={() => handleNavigation('grounding')} onHome={() => handleNavigation('home')} />;
+            case 'guided-audio':
+                return <GuidedAudioPage onBack={() => handleNavigation('grounding')} onHome={() => handleNavigation('home')}/>;
+            case 'journey':
+                 return <JourneyPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
+            case 'goals':
+                return <GoalsPage onBack={() => handleNavigation('tracker-hub')} />;
+            case 'known-bugs':
+                return <KnownBugsPage onBack={() => handleNavigation('home')} />;
+            case 'data-privacy':
+                return <DataPrivacyPage onBack={() => handleNavigation('home')} />;
+            case 'profile':
+                return <ProfilePage onBack={() => handleNavigation('home')} />;
+            default:
+                return <HomePage onNavigate={handleNavigation} username={username} />;
+        }
+    };
 
-  return <MainApp onLogout={handleLogout} installPromptEvent={installPromptEvent} onInstallClick={handleInstallClick} />;
+    return (
+        <div className="app-container">
+            {isOffline && (
+                <div className="offline-indicator">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 16.5a13.2 13.2 0 0 1 13 0"/><path d="M2.5 13.5a17.4 17.4 0 0 1 19 0"/><path d="M8.5 19.5a8.7 8.7 0 0 1 7 0"/><path d="M12 22.5a2.6 2.6 0 0 1 0-5 2.6 2.6 0 0 1 0 5z"/><path d="M2 8l9.3-6.5a1 1 0 0 1 1.4 0L22 8"/><path d="M17 8v1.3"/><path d="M20 11v1.3"/><path d="M7 8v1.3"/><path d="M4 11v1.3"/></svg>
+                    <span>You are currently offline. Some features may be limited.</span>
+                </div>
+            )}
+            {renderPage()}
+        </div>
+    );
 };
-
 
 const container = document.getElementById('root');
-const root = createRoot(container!);
-root.render(<App />);
+if (container) {
+    const root = createRoot(container);
+    root.render(
+        <React.StrictMode>
+            <App />
+        </React.StrictMode>
+    );
+}
