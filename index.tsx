@@ -3334,7 +3334,7 @@ const GoalsPage = ({ onBack, onNavigate }) => {
             <div className="content-with-side-button">
                 <div className="side-button-wrapper">
                     <button onClick={view === 'create' ? () => setView('dashboard') : onBack} className="home-button" aria-label="Go back">
-                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
                          <span>{view === 'create' ? 'Back to Goals' : 'Back'}</span>
                     </button>
                 </div>
@@ -3347,7 +3347,7 @@ const GoalsPage = ({ onBack, onNavigate }) => {
                     {view === 'dashboard' && (
                         <>
                             <button className="create-goal-button" onClick={() => setView('create')}>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
                                 <span>Set a New Goal</span>
                             </button>
 
@@ -3486,10 +3486,154 @@ const SobrietyClock = ({ size = 'large', onNavigate }) => {
     );
 };
 
+// --- History Page Component ---
+const HistoryPage = ({ onBack }) => {
+    const [combinedHistory, setCombinedHistory] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchAllHistory = () => {
+            let allItems = [];
+
+            const sources = [
+                { key: 'journalHistory', parser: (item) => ({ id: `journal-${item.id}`, type: 'journal', timestamp: item.entryTimestamp || new Date(item.date).getTime(), data: item }) },
+                { key: 'cravingsHistory', parser: (item) => ({ id: `craving-${item.id}`, type: 'craving', timestamp: new Date(item.date).getTime(), data: item }) },
+                { key: 'goals', parser: (item) => item.completed ? ({ id: `goal-${item.id}`, type: 'goal', timestamp: new Date(item.completedAt).getTime(), data: item }) : null },
+                { key: 'groundingHistory', parser: (item, index) => ({ id: `grounding-${new Date(item.date).getTime()}-${index}`, type: 'grounding', timestamp: new Date(item.date).getTime(), data: item }) },
+                { key: 'threeGoodThingsHistory', parser: (item) => ({ id: `good-things-${item.id}`, type: 'good-things', timestamp: new Date(item.date).getTime(), data: item }) },
+                { key: 'thoughtTriangleHistory', parser: (item) => ({ id: `thought-triangle-${item.id}`, type: 'thought-triangle', timestamp: new Date(item.date).getTime(), data: item }) },
+                { key: 'auditHistory', parser: (item) => ({ id: `audit-${new Date(item.date).getTime()}`, type: 'audit', timestamp: new Date(item.date).getTime(), data: item }) },
+            ];
+
+            sources.forEach(source => {
+                try {
+                    const data = JSON.parse(localStorage.getItem(source.key) || '[]');
+                    const items = data.map(source.parser).filter(Boolean);
+                    allItems.push(...items);
+                } catch (e) {
+                    console.error(`Error parsing history for ${source.key}`, e);
+                }
+            });
+
+            allItems.sort((a, b) => b.timestamp - a.timestamp);
+            setCombinedHistory(allItems);
+            setIsLoading(false);
+        };
+
+        fetchAllHistory();
+    }, []);
+
+    const HistoryItemCard = ({ item }) => {
+        const { type, data, timestamp } = item;
+        const date = new Date(timestamp);
+        
+        const formatTime12Hour = (time24) => {
+            if (!time24) return '';
+            const [hours, minutes] = time24.split(':');
+            const h = parseInt(hours, 10);
+            const ampm = h >= 12 ? 'PM' : 'AM';
+            const h12 = h % 12 || 12;
+            return ` at ${h12}:${minutes} ${ampm}`;
+        };
+
+        const headers = {
+            journal: { title: 'Journal Entry', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> },
+            craving: { title: 'Craving Logged', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h3v8H3zM8 8h3v12H8zM13 4h3v16h-3zM18 16h3v4h-3z"/></svg> },
+            goal: { title: 'Goal Completed', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> },
+            grounding: { title: 'Grounding Exercise', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 16.5a5 5 0 1 0 7 0"/><path d="M12 22a5 5 0 0 0 5-5c0-1.42-.64-2.7-1.69-3.58"/><path d="M12 22a5 5 0 0 1-5-5c0-1.42.64-2.7 1.69-3.58"/><path d="M12 12a5 5 0 0 0 5-5c0-1.42-.64-2.7-1.69-3.58"/><path d="M12 12a5 5 0 0 1-5-5c0-1.42.64-2.7 1.69-3.58"/><path d="M2 13.29a5 5 0 0 0 1.69 3.58"/><path d="M22 13.29a5 5 0 0 1-1.69 3.58"/><path d="M12 2a5 5 0 0 0-1.69 3.58"/><path d="M12 2a5 5 0 0 1 1.69 3.58"/></svg> },
+            'good-things': { title: 'Three Good Things', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg> },
+            'thought-triangle': { title: 'Thought Triangle', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 21h20L12 2z"></path></svg> },
+            audit: { title: 'AUDIT Screen', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg> },
+        };
+
+        const renderBody = () => {
+            switch (type) {
+                case 'journal':
+                    const displayAmount = `${data.amountValue} ${data.amountUnit || ''}`;
+                    return <p>Felt <strong>{data.feeling}</strong> and logged {displayAmount.trim()} of {data.substance}.</p>;
+                case 'craving':
+                    return <>
+                        <p><strong>Substance:</strong> {data.substance} (Intensity: {data.intensity}/10)</p>
+                        <p><strong>Coping:</strong> {data.copingMechanism}</p>
+                    </>;
+                case 'goal':
+                    return <p>You achieved your goal: <strong>{data.title}</strong>. Well done!</p>;
+                case 'grounding':
+                    return <p>Completed the <strong>{data.technique}</strong> exercise.</p>;
+                case 'good-things':
+                    return <ul className="history-good-things-list">
+                        {data.things.map((t, i) => <li key={i}>{t.what}</li>)}
+                    </ul>;
+                case 'thought-triangle':
+                    return <p><strong>Situation:</strong> {data.situation}</p>;
+                case 'audit':
+                    return <p>Completed the AUDIT with a score of <strong>{data.score} ({data.interpretation.level})</strong>.</p>;
+                default:
+                    return null;
+            }
+        };
+
+        const { title, icon } = headers[type];
+        
+        return (
+            <div className="card history-card">
+                <div className={`history-card-header type-${type}`}>
+                    <div className="history-card-header-icon">{icon}</div>
+                    <div className="history-card-header-text">
+                        <h3>{title}</h3>
+                        <span>{date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                    </div>
+                </div>
+                <div className="history-card-body">
+                    {renderBody()}
+                </div>
+            </div>
+        );
+    };
+
+    if (isLoading) {
+        return (
+            <div className="page-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                <div className="spinner"></div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="page-container">
+            <div className="content-with-side-button">
+                <div className="side-button-wrapper">
+                    <button onClick={onBack} className="home-button" aria-label="Go back to home">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+                        <span>Home</span>
+                    </button>
+                </div>
+                <main>
+                    <div className="page-header-text">
+                        <h1 className="app-title">Your History</h1>
+                        <p className="app-subtitle">A timeline of your entire journey.</p>
+                    </div>
+                    
+                    {combinedHistory.length > 0 ? (
+                        <div className="history-list-container">
+                            {combinedHistory.map(item => <HistoryItemCard key={item.id} item={item} />)}
+                        </div>
+                    ) : (
+                        <div className="no-data-placeholder card" style={{ padding: '3rem 1rem' }}>
+                            <p>No activities have been logged yet. Your history will appear here once you start using the tools.</p>
+                        </div>
+                    )}
+                </main>
+            </div>
+        </div>
+    );
+};
+
 
 // Data for menu search functionality
 const SEARCHABLE_ITEMS = [
     { title: 'Profile', page: 'profile', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> },
+    { title: 'History', page: 'history', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> },
     { title: 'Data & Privacy', page: 'data-privacy', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg> },
     { title: 'Known Bugs', page: 'known-bugs', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 11.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0z"/><path d="M20 18.5a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z"/><path d="M4 18.5a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z"/><path d="M18 12H6"/><path d="M11 3.4a12 12 0 0 1 2 0"/><path d="M17.7 5.2a12 12 0 0 1 1.6 1.6"/><path d="M20.6 11a12 12 0 0 1 0 2"/><path d="M19.4 17.7a12 12 0 0 1-1.6 1.6"/><path d="M13 20.6a12 12 0 0 1-2 0"/><path d="M6.3 19.4a12 12 0 0 1-1.6-1.6"/><path d="M3.4 13a12 12 0 0 1 0-2"/><path d="M5.2 6.3a12 12 0 0 1 1.6-1.6"/></svg> },
     { title: 'Daily Journal', page: 'tracker', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> },
@@ -3564,6 +3708,10 @@ const ProfileMenu = ({ isOpen, onClose, onNavigate }) => {
                         <button className="profile-menu-item" onClick={() => { onNavigate('profile'); onClose(); }}>
                              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                             <span>Profile</span>
+                        </button>
+                         <button className="profile-menu-item" onClick={() => { onNavigate('history'); onClose(); }}>
+                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                            <span>History</span>
                         </button>
                         <button className="profile-menu-item" onClick={() => { onNavigate('data-privacy'); onClose(); }}>
                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
@@ -3971,6 +4119,8 @@ const App = () => {
                 return <DataPrivacyPage onBack={() => handleNavigation('home')} />;
             case 'profile':
                 return <ProfilePage onBack={() => handleNavigation('home')} />;
+            case 'history':
+                return <HistoryPage onBack={() => handleNavigation('home')} />;
             default:
                 return <HomePage onNavigate={handleNavigation} username={username} />;
         }
