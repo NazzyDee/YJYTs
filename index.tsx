@@ -46,6 +46,8 @@ const LoginPage = ({ onLoginSuccess }) => {
     const [showConfirmModal, setShowConfirmModal] = useState(false);
     const [confirmDeleteText, setConfirmDeleteText] = useState('');
     const [showPrivacyModal, setShowPrivacyModal] = useState(false);
+    const [flashingDotIndex, setFlashingDotIndex] = useState<number | null>(null);
+    const [flickeringButton, setFlickeringButton] = useState<string | null>(null);
 
     useEffect(() => {
         const storedPin = localStorage.getItem('userPIN');
@@ -56,7 +58,17 @@ const LoginPage = ({ onLoginSuccess }) => {
 
     const handlePinChange = (value) => {
         if (pin.length < 4) {
+            const currentIndex = pin.length;
+            setFlashingDotIndex(currentIndex);
+            setFlickeringButton(value);
             setPin(pin + value);
+
+            setTimeout(() => {
+                setFlashingDotIndex(null);
+            }, 300); // Match CSS animation duration
+            setTimeout(() => {
+                setFlickeringButton(null);
+            }, 300);
         }
     };
 
@@ -204,17 +216,19 @@ const LoginPage = ({ onLoginSuccess }) => {
                     <h2>{title}</h2>
                     <div className="pin-input-container">
                         {[0, 1, 2, 3].map(i => (
-                            <div key={i} className={`pin-dot ${pin.length > i ? 'filled' : ''}`}></div>
+                            <div key={i} className={`pin-dot ${pin.length > i ? 'filled' : ''} ${flashingDotIndex === i ? 'flashing' : ''}`}></div>
                         ))}
                     </div>
                     {error && <p className="pin-error">{error}</p>}
                     <div className="pin-keypad">
                         {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
-                            <button key={num} onClick={() => handlePinChange(num.toString())}>{num}</button>
+                            <button key={num} onClick={() => handlePinChange(num.toString())} className={flickeringButton === num.toString() ? 'flickering' : ''}>{num}</button>
                         ))}
                         <button onClick={handleDelete}>Del</button>
-                        <button onClick={() => handlePinChange('0')}>0</button>
-                        <button onClick={handlePinSubmit} className="confirm-button" disabled={pin.length !== 4}>{buttonText}</button>
+                        <button onClick={() => handlePinChange('0')} className={flickeringButton === '0' ? 'flickering' : ''}>0</button>
+                        <button onClick={handlePinSubmit} className="confirm-button" disabled={pin.length !== 4} aria-label={buttonText}>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"></path><path d="M12 5l7 7-7 7"></path></svg>
+                        </button>
                     </div>
                      {setupStage === 'login' && (
                         <button onClick={handleForgotPin} className="forgot-pin-button">
@@ -397,8 +411,12 @@ const feelingsWheelData: { [key: string]: FeelingNode } = {
 const FeelingsWheel = ({ onFeelingSelect, onClose, confirmText = "Confirm Feeling" }) => {
     const [path, setPath] = useState<string[]>([]);
     const [currentData, setCurrentData] = useState<{ [key: string]: FeelingNode }>(feelingsWheelData);
-    const [revealed, setRevealed] = useState(false);
-    const [definitionModal, setDefinitionModal] = useState<{ feeling: string | null }>({ feeling: null });
+    const [definitionModal, setDefinitionModal] = useState<{
+        feeling: string | null;
+        isLoading: boolean;
+        definition: string;
+        error: string;
+    }>({ feeling: null, isLoading: false, definition: '', error: '' });
 
     useEffect(() => {
         let newData: { [key: string]: FeelingNode } | undefined = feelingsWheelData;
@@ -406,31 +424,42 @@ const FeelingsWheel = ({ onFeelingSelect, onClose, confirmText = "Confirm Feelin
             newData = newData?.[key]?.children;
         }
         setCurrentData(newData || {});
-        
-        setRevealed(false);
-        const timer = setTimeout(() => setRevealed(true), 100);
-        return () => clearTimeout(timer);
     }, [path]);
 
-
-    const handleFeelingClick = (feeling: string) => {
-        setDefinitionModal({ feeling });
+    const handleFeelingClick = async (feeling: string) => {
+        setDefinitionModal({ feeling, isLoading: true, definition: '', error: '' });
+        try {
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const systemInstruction = "You are a helpful assistant that provides concise, easy-to-understand definitions of emotions.";
+            const userPrompt = `Provide a brief, simple definition for the feeling: "${feeling}". Describe what it feels like in one or two sentences.`;
+            
+            trackEvent('fetch_feeling_definition', 'AI Features', feeling);
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash',
+                contents: userPrompt,
+                config: { systemInstruction }
+            });
+            setDefinitionModal(prev => ({ ...prev, isLoading: false, definition: response.text }));
+        } catch (err) {
+            console.error("Error fetching definition:", err);
+            setDefinitionModal(prev => ({ ...prev, isLoading: false, error: "Could not load definition at this time." }));
+        }
     };
 
     const handleDrillDown = (feeling: string) => {
         if (currentData[feeling]?.children && Object.keys(currentData[feeling].children).length > 0) {
             setPath([...path, feeling]);
         }
-        setDefinitionModal({ feeling: null });
+        closeModal();
     };
 
     const handleConfirmSelection = (feeling: string) => {
         onFeelingSelect(feeling);
-        setDefinitionModal({ feeling: null });
+        closeModal();
     };
 
     const closeModal = () => {
-        setDefinitionModal({ feeling: null });
+        setDefinitionModal({ feeling: null, isLoading: false, definition: '', error: '' });
     };
 
     const handleBack = () => {
@@ -438,7 +467,31 @@ const FeelingsWheel = ({ onFeelingSelect, onClose, confirmText = "Confirm Feelin
     };
     
     const items = Object.keys(currentData);
-    const angleStep = 360 / items.length;
+    const sliceAngle = items.length > 0 ? 360 / items.length : 360;
+
+    // Generate colors for the current view
+    const colors = useMemo(() => {
+        const parentColor = path.length > 0 ? feelingsWheelData[path[0]]?.color : null;
+        return items.map((feeling, index) => {
+            if (path.length === 0) {
+                return feelingsWheelData[feeling]?.color || `hsl(${index * 50}, 70%, 50%)`;
+            }
+            if (!parentColor) return `hsl(${index * 50}, 70%, 50%)`;
+            
+            const [h, s, l] = parentColor.match(/\d+/g).map(Number);
+            const lightnessVariation = (items.length / 2 - index) * 5;
+            const newLightness = Math.max(25, Math.min(75, l - lightnessVariation));
+            return `hsl(${h}, ${s}%, ${newLightness}%)`;
+        });
+    }, [items, path]);
+
+    const polarToCartesian = (centerX, centerY, radius, angleInDegrees) => {
+        const angleInRadians = (angleInDegrees - 90) * Math.PI / 180.0;
+        return {
+            x: centerX + (radius * Math.cos(angleInRadians)),
+            y: centerY + (radius * Math.sin(angleInRadians))
+        };
+    };
 
     return (
         <div className="feelings-wheel-overlay" onClick={onClose}>
@@ -449,34 +502,59 @@ const FeelingsWheel = ({ onFeelingSelect, onClose, confirmText = "Confirm Feelin
                     <button className="wheel-nav-button close" onClick={onClose}>Close</button>
                 </div>
 
-                <div className={`wheel-display ${path.length === 0 ? 'first-level' : ''}`}>
-                    {path.length > 0 && (
-                        <div className="wheel-center">
-                            <span className="wheel-center-text">{path[path.length - 1]}</span>
-                        </div>
-                    )}
-                    <div className="wheel-segments">
+                <div className="wheel-pie-chart">
+                    <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
                         {items.map((feeling, index) => {
-                            const angle = index * angleStep;
-                            const nodeForColor = path.length > 0 ? feelingsWheelData[path[0]] : feelingsWheelData[feeling];
-                            const parentColor = nodeForColor?.color || 'hsl(0, 0%, 50%)';
+                            const startAngle = index * sliceAngle;
+                            const endAngle = startAngle + sliceAngle;
                             
+                            const radius = path.length === 0 ? 50 : 45;
+                            const center = 50;
+                            
+                            const start = polarToCartesian(center, center, radius, endAngle);
+                            const end = polarToCartesian(center, center, radius, startAngle);
+                            
+                            const largeArcFlag = sliceAngle > 180 ? 1 : 0;
+                            
+                            const d = [
+                                "M", center, center,
+                                "L", start.x, start.y,
+                                "A", radius, radius, 0, largeArcFlag, 0, end.x, end.y,
+                                "Z"
+                            ].join(" ");
+
+                            // Label position
+                            const labelAngle = startAngle + sliceAngle / 2;
+                            const labelRadius = radius * 0.65;
+                            const labelPos = polarToCartesian(center, center, labelRadius, labelAngle);
+                            const words = feeling.split(' ');
+
                             return (
-                                <button 
-                                    key={feeling} 
-                                    className={`wheel-segment ${revealed ? 'revealed' : ''}`}
-                                    style={{
-                                        '--angle': `${angle}deg`,
-                                        '--bg-color': parentColor,
-                                        '--delay': `${index * 50}ms`
-                                    } as React.CSSProperties}
-                                    onClick={() => handleFeelingClick(feeling)}
-                                >
-                                    {feeling}
-                                </button>
+                                <g key={feeling} onClick={() => handleFeelingClick(feeling)}>
+                                    <path d={d} fill={colors[index]} className="wheel-pie-slice" />
+                                     <text
+                                        x={labelPos.x}
+                                        y={labelPos.y}
+                                        className="wheel-pie-label"
+                                        textAnchor="middle"
+                                        dominantBaseline="middle"
+                                    >
+                                        {words.map((word, i) => (
+                                          <tspan x={labelPos.x} dy={i === 0 ? 0 : '1.2em'} key={i}>{word}</tspan>
+                                        ))}
+                                    </text>
+                                </g>
                             );
                         })}
-                    </div>
+                        {path.length > 0 && (
+                            <g className="wheel-center-group">
+                                <circle cx="50" cy="50" r="20" fill="var(--card-bg)" />
+                                <text x="50" y="50.5" textAnchor="middle" dominantBaseline="middle">
+                                    {path[path.length - 1]}
+                                </text>
+                            </g>
+                        )}
+                    </svg>
                 </div>
 
                  {definitionModal.feeling && (
@@ -484,7 +562,9 @@ const FeelingsWheel = ({ onFeelingSelect, onClose, confirmText = "Confirm Feelin
                         <div className="definition-modal-content card" onClick={e => e.stopPropagation()}>
                             <h3>{definitionModal.feeling}</h3>
                             <div className="definition-text">
-                                <p>You can explore this feeling further or select it for your journal.</p>
+                                {definitionModal.isLoading && <div className="spinner-small"></div>}
+                                {definitionModal.error && <p className="pin-error" style={{height: 'auto', marginBottom: 0}}>{definitionModal.error}</p>}
+                                {definitionModal.definition && <p>{definitionModal.definition}</p>}
                             </div>
                             <div className="definition-modal-actions">
                                 {currentData[definitionModal.feeling]?.children && Object.keys(currentData[definitionModal.feeling].children).length > 0 && (
@@ -923,6 +1003,155 @@ const TrackerPage = ({ onBack }) => {
       </div>
     </div>
   );
+};
+
+// --- Cravings Tracker Page Component ---
+const CravingsTrackerPage = ({ onBack }) => {
+    const [intensity, setIntensity] = useState(5);
+    const [substance, setSubstance] = useState('');
+    const [trigger, setTrigger] = useState('');
+    const [copingMechanism, setCopingMechanism] = useState('');
+    const [history, setHistory] = useState(() => {
+        try {
+            const saved = localStorage.getItem('cravingsHistory');
+            return saved ? JSON.parse(saved) : [];
+        } catch (e) {
+            console.error("Could not load cravings history", e);
+            return [];
+        }
+    });
+    const [confirmationMessage, setConfirmationMessage] = useState('');
+
+    useEffect(() => {
+        try {
+            localStorage.setItem('cravingsHistory', JSON.stringify(history));
+        } catch (e) {
+            console.error("Could not save cravings history", e);
+        }
+    }, [history]);
+
+    const handleSave = () => {
+        if (substance.trim() === '' || trigger.trim() === '' || copingMechanism.trim() === '') return;
+
+        const newEntry = {
+            id: Date.now(),
+            date: new Date().toISOString(),
+            intensity,
+            substance: substance.trim(),
+            trigger: trigger.trim(),
+            copingMechanism: copingMechanism.trim(),
+        };
+
+        setHistory([newEntry, ...history]);
+        setIntensity(5);
+        setSubstance('');
+        setTrigger('');
+        setCopingMechanism('');
+        
+        trackEvent('log_craving', 'Tracker', 'Cravings Tracker');
+
+        setConfirmationMessage('Craving logged successfully!');
+        setTimeout(() => setConfirmationMessage(''), 3000);
+    };
+
+    const isSaveDisabled = substance.trim() === '' || trigger.trim() === '' || copingMechanism.trim() === '';
+
+    return (
+        <div className="page-container">
+            <div className="content-with-side-button">
+                <div className="side-button-wrapper">
+                    <button onClick={onBack} className="home-button" aria-label="Go back">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
+                       <span>Back</span>
+                    </button>
+                </div>
+                <main className="tracker-content">
+                    <div className="page-header-text">
+                        <h1 className="app-title">Cravings Tracker</h1>
+                        <p className="app-subtitle">Log cravings to understand triggers and strengthen coping skills.</p>
+                    </div>
+                    
+                    <div className="card cravings-form-card">
+                        <div className="form-group">
+                            <label htmlFor="craving-intensity">Intensity: <span className="intensity-value">{intensity}/10</span></label>
+                            <input
+                                id="craving-intensity"
+                                type="range"
+                                min="1"
+                                max="10"
+                                value={intensity}
+                                onChange={(e) => setIntensity(parseInt(e.target.value, 10))}
+                                className="intensity-slider"
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="craving-substance">What did you crave?</label>
+                            <input
+                                id="craving-substance"
+                                type="text"
+                                placeholder="e.g., Alcohol, Cannabis"
+                                value={substance}
+                                onChange={(e) => setSubstance(e.target.value)}
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label htmlFor="craving-trigger">What was the trigger?</label>
+                            <textarea
+                                id="craving-trigger"
+                                placeholder="e.g., Felt stressed after work, saw an ad"
+                                value={trigger}
+                                onChange={(e) => setTrigger(e.target.value)}
+                                rows={3}
+                            />
+                        </div>
+                        
+                        <div className="form-group">
+                            <label htmlFor="craving-coping">What coping mechanism did you use?</label>
+                            <textarea
+                                id="craving-coping"
+                                placeholder="e.g., Went for a walk, called a friend, used the 5-4-3-2-1 method"
+                                value={copingMechanism}
+                                onChange={(e) => setCopingMechanism(e.target.value)}
+                                rows={4}
+                            />
+                        </div>
+
+                        <button className="log-button" onClick={handleSave} disabled={isSaveDisabled}>
+                            Log Craving
+                        </button>
+                        {confirmationMessage && (
+                            <div className="confirmation-message">{confirmationMessage}</div>
+                        )}
+                    </div>
+                    
+                    <hr className="history-divider" />
+                    <div className="history-section">
+                        <h3 className="history-title">Your Craving History</h3>
+                        {history.length > 0 ? (
+                            <ul className="history-list cravings-history-list">
+                                {history.map(entry => (
+                                    <li key={entry.id} className="card craving-history-item">
+                                        <div className="craving-item-header">
+                                            <h4>{entry.substance} <span className="craving-intensity-badge">Intensity: {entry.intensity}/10</span></h4>
+                                            <span className="craving-date">{new Date(entry.date).toLocaleDateString('en-AU')}</span>
+                                        </div>
+                                        <div className="craving-item-body">
+                                            <p><strong>Trigger:</strong> {entry.trigger}</p>
+                                            <p><strong>Coping:</strong> {entry.copingMechanism}</p>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="no-history-message">Your logged cravings will appear here.</p>
+                        )}
+                    </div>
+                </main>
+            </div>
+        </div>
+    );
 };
 
 // --- AUDIT Test Component ---
@@ -2806,7 +3035,7 @@ const JourneyPage = ({ onBack, onNavigate }) => {
                         
                         <div className="card summary-card">
                             <h2 className="summary-card-title">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 16.5c-2.1 2.1-2.1 5.6 0 7.7 2.1 2.1 5.6 2.1 7.7 0l1.4-1.4c.5-.5.5-1.2 0-1.7l-5.3-5.3c-.5-.5-1.2-.5-1.7 0l-2.1 2.1z"/><path d="m19.5 2.5 2-2"/><path d="m16.5 5.5 2-2"/><path d="m13.5 8.5 2-2"/><path d="M19 10c-2.8 2.8-5.6 4.2-8.4 4.2-2.8 0-5.6-1.4-8.4-4.2"/></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 16.5a5 5 0 1 0 7 0"/><path d="M12 22a5 5 0 0 0 5-5c0-1.42-.64-2.7-1.69-3.58"/><path d="M12 22a5 5 0 0 1-5-5c0-1.42.64-2.7 1.69-3.58"/><path d="M12 12a5 5 0 0 0 5-5c0-1.42-.64-2.7-1.69-3.58"/><path d="M12 12a5 5 0 0 1-5-5c0-1.42.64-2.7 1.69-3.58"/><path d="M2 13.29a5 5 0 0 0 1.69 3.58"/><path d="M22 13.29a5 5 0 0 1-1.69 3.58"/><path d="M12 2a5 5 0 0 0-1.69 3.58"/><path d="M12 2a5 5 0 0 1 1.69 3.58"/></svg>
                                 <span>Grounding Exercises</span>
                             </h2>
                             {groundingStats ? (
@@ -2871,7 +3100,7 @@ const JourneyPage = ({ onBack, onNavigate }) => {
 };
 
 // --- Goals Page Component ---
-const GoalsPage = ({ onBack }) => {
+const GoalsPage = ({ onBack, onNavigate }) => {
     const [goals, setGoals] = useState([]);
     const [view, setView] = useState('dashboard'); // 'dashboard', 'create'
     const [activeTab, setActiveTab] = useState('active'); // 'active', 'completed'
@@ -2931,81 +3160,141 @@ const GoalsPage = ({ onBack }) => {
         trackEvent('complete_goal', 'Goals', goals.find(g => g.id === goalId).title);
     };
 
-    const CreateGoalForm = () => {
+    const CreateGoalForm = ({ onSave, onNavigate }) => {
         const [title, setTitle] = useState('');
         const [targetValue, setTargetValue] = useState('');
         const [unit, setUnit] = useState('');
+        const [achievable, setAchievable] = useState('');
+        const [relevant, setRelevant] = useState('');
         const [deadline, setDeadline] = useState('');
-        const [reminderEnabled, setReminderEnabled] = useState(false);
-        const [reminderTime, setReminderTime] = useState('19:00');
+        const [coreValues, setCoreValues] = useState([]);
+        const [linkedValue, setLinkedValue] = useState('');
 
-        const isFormValid = title.trim() && targetValue.trim() && unit.trim();
-
+        useEffect(() => {
+            try {
+                const savedValues = localStorage.getItem('coreValues');
+                if (savedValues) {
+                    setCoreValues(JSON.parse(savedValues));
+                }
+            } catch (e) { console.error("Could not load core values for goals", e); }
+        }, []);
+        
         const handleSubmit = (e) => {
             e.preventDefault();
-            if (!isFormValid) return;
-            handleCreateGoal({ title, targetValue: parseFloat(targetValue), unit, deadline, reminder: { enabled: reminderEnabled, time: reminderTime } });
+            if (title.trim() === '' || targetValue.trim() === '' || unit.trim() === '') return;
+            onSave({ 
+                title, 
+                targetValue: parseFloat(targetValue), 
+                unit, 
+                deadline, 
+                linkedValue,
+                achievableReason: achievable,
+                relevantReason: relevant,
+            });
         };
+        
+        const isSaveDisabled = title.trim() === '' || targetValue.trim() === '' || unit.trim() === '';
 
         return (
-            <form className="create-goal-form" onSubmit={handleSubmit}>
-                <div className="card form-section">
-                    <h3 className="form-section-title">
-                        <span>1</span> What is your goal?
-                    </h3>
-                    <p className="form-section-description">Make it specific. Instead of "exercise more," try "run 10km a week."</p>
-                    <div className="form-group">
-                        <label htmlFor="goal-title">Goal Title</label>
-                        <input id="goal-title" type="text" placeholder="e.g., Run 10km per week" value={title} onChange={e => setTitle(e.target.value)} autoFocus />
+            <form className="create-goal-form smart-form-container" onSubmit={handleSubmit}>
+                <div className="smart-section-card">
+                    <div className="smart-section-header">
+                        <h3><span className="smart-letter">S</span>pecific</h3>
+                        <p>What is your goal? Be as clear and specific as possible.</p>
                     </div>
+                    <input
+                        type="text"
+                        placeholder="e.g., Exercise 3 times a week"
+                        value={title}
+                        onChange={e => setTitle(e.target.value)}
+                        autoFocus
+                    />
                 </div>
 
-                <div className="card form-section">
-                    <h3 className="form-section-title">
-                        <span>2</span> How will you measure it?
-                    </h3>
-                    <p className="form-section-description">This should be a number. If your goal is to run 10km, the target is 10 and the unit is "km".</p>
+                <div className="smart-section-card">
+                     <div className="smart-section-header">
+                        <h3><span className="smart-letter">M</span>easurable</h3>
+                        <p>How will you measure your progress? Define a target and a unit.</p>
+                    </div>
                     <div className="measurable-inputs">
-                        <div className="form-group">
-                            <label htmlFor="goal-target">Target</label>
-                            <input id="goal-target" type="number" placeholder="e.g., 10" value={targetValue} onChange={e => setTargetValue(e.target.value)} />
-                        </div>
-                        <div className="form-group">
-                            <label htmlFor="goal-unit">Unit</label>
-                            <input id="goal-unit" type="text" placeholder="e.g., km" value={unit} onChange={e => setUnit(e.target.value)} />
-                        </div>
-                    </div>
-                </div>
-                
-                 <div className="card form-section">
-                    <h3 className="form-section-title">
-                        <span>3</span> What is the deadline?
-                    </h3>
-                     <p className="form-section-description">Setting a target date helps create urgency. This is optional but recommended.</p>
-                     <div className="form-group">
-                        <label htmlFor="goal-deadline">Target Date (Optional)</label>
-                        <input id="goal-deadline" type="date" value={deadline} onChange={e => setDeadline(e.target.value)} style={{colorScheme: 'dark'}}/>
+                        <input
+                            type="number"
+                            placeholder="e.g., 12"
+                            value={targetValue}
+                            onChange={e => setTargetValue(e.target.value)}
+                        />
+                        <input
+                            type="text"
+                            placeholder="e.g., workouts"
+                            value={unit}
+                            onChange={e => setUnit(e.target.value)}
+                        />
                     </div>
                 </div>
 
-                <div className="card form-section reminder-section">
-                    <h3 className="form-section-title">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                        <span>Set a Reminder</span>
-                    </h3>
-                    <div className="reminder-toggle">
-                        <label htmlFor="goal-reminder-enabled">Remind me to log my progress</label>
-                        <input id="goal-reminder-enabled" type="checkbox" checked={reminderEnabled} onChange={e => setReminderEnabled(e.target.checked)} />
+                <div className="smart-section-card">
+                    <div className="smart-section-header">
+                        <h3><span className="smart-letter">A</span>chievable</h3>
+                        <p>Is this goal realistic for you right now? (Optional)</p>
                     </div>
-                    {reminderEnabled && (
-                        <div className="reminder-time-input">
-                            <label htmlFor="goal-reminder-time">Reminder time:</label>
-                            <input id="goal-reminder-time" type="time" value={reminderTime} onChange={e => setReminderTime(e.target.value)} style={{colorScheme: 'dark'}} />
+                     <textarea
+                        placeholder="e.g., I have free time in the evenings and can start with walking."
+                        value={achievable}
+                        onChange={e => setAchievable(e.target.value)}
+                        rows={3}
+                    />
+                </div>
+
+                <div className="smart-section-card">
+                     <div className="smart-section-header">
+                        <h3><span className="smart-letter">R</span>elevant</h3>
+                        <p>Why is this goal important to you? How does it align with your values? (Optional)</p>
+                    </div>
+                    <textarea
+                        placeholder="e.g., This aligns with my value of Health and will improve my mood."
+                        value={relevant}
+                        onChange={e => setRelevant(e.target.value)}
+                        rows={3}
+                    />
+                    {coreValues.length > 0 ? (
+                        <div className="values-selection-grid">
+                            {coreValues.map(value => (
+                                <button
+                                    type="button"
+                                    key={value.title}
+                                    className={`value-selection-chip ${linkedValue === value.title ? 'selected' : ''}`}
+                                    onClick={() => setLinkedValue(linkedValue === value.title ? '' : value.title)}
+                                    title={value.description}
+                                >
+                                    {value.title}
+                                </button>
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="no-values-prompt">
+                            <p>Link goals to your values for more motivation.</p>
+                            <button type="button" className="prompt-button" onClick={() => onNavigate('values-exercise', { initialStep: 'deck-selection' })}>
+                                Complete the Values Exercise
+                            </button>
                         </div>
                     )}
                 </div>
 
-                <button type="submit" className="log-button" disabled={!isFormValid}>Create Goal</button>
+                <div className="smart-section-card">
+                     <div className="smart-section-header">
+                        <h3><span className="smart-letter">T</span>ime-bound</h3>
+                        <p>When will you achieve this goal by?</p>
+                    </div>
+                    <input
+                        type="date"
+                        value={deadline}
+                        onChange={e => setDeadline(e.target.value)}
+                        style={{colorScheme: 'dark'}}
+                        placeholder="dd/mm/yyyy"
+                    />
+                </div>
+                
+                <button type="submit" className="log-button" disabled={isSaveDisabled}>Create Goal</button>
             </form>
         );
     };
@@ -3051,8 +3340,8 @@ const GoalsPage = ({ onBack }) => {
                 </div>
                 <main className="goals-dashboard">
                     <div className="page-header-text">
-                        <h1 className="app-title">{view === 'create' ? 'Create a New Goal' : 'Your Goals'}</h1>
-                        <p className="app-subtitle">{view === 'create' ? 'Follow the steps to set a SMART goal.' : 'Track your progress and celebrate your achievements.'}</p>
+                        <h1 className="app-title">{view === 'create' ? 'Set a SMART Goal' : 'Your Goals'}</h1>
+                        <p className="app-subtitle">{view === 'create' ? 'Fill out the sections below to create a new goal.' : 'Track your progress and celebrate your achievements.'}</p>
                     </div>
 
                     {view === 'dashboard' && (
@@ -3085,17 +3374,15 @@ const GoalsPage = ({ onBack }) => {
                                                     <span className="progress-text">{progress.toFixed(0)}% Complete</span>
                                                     <span className="progress-numbers">{goal.currentValue.toFixed(1)} / {goal.targetValue.toFixed(1)} {goal.unit}</span>
                                                 </div>
-                                                {(goal.deadline || (goal.reminder && goal.reminder.enabled)) && (
-                                                    <div className="goal-meta">
-                                                        <span>{goal.deadline ? `Due: ${new Date(goal.deadline).toLocaleDateString()}` : ''}</span>
-                                                        {goal.reminder && goal.reminder.enabled && (
-                                                            <span className="goal-reminder-info">
-                                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                                                                {goal.reminder.time}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                )}
+                                                <div className="goal-meta">
+                                                    {goal.linkedValue && (
+                                                        <span className="goal-linked-value">
+                                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+                                                            {goal.linkedValue}
+                                                        </span>
+                                                    )}
+                                                    <span>{goal.deadline ? `Due: ${new Date(goal.deadline).toLocaleDateString()}` : ''}</span>
+                                                </div>
                                                 {!goal.completed ? (
                                                     <div className="goal-actions">
                                                         <button className="goal-action-button log" onClick={() => setLogProgressGoal(goal)}>Log Progress</button>
@@ -3119,7 +3406,7 @@ const GoalsPage = ({ onBack }) => {
                         </>
                     )}
                     
-                    {view === 'create' && <CreateGoalForm />}
+                    {view === 'create' && <CreateGoalForm onSave={handleCreateGoal} onNavigate={onNavigate} />}
 
                 </main>
             </div>
@@ -3204,8 +3491,9 @@ const SobrietyClock = ({ size = 'large', onNavigate }) => {
 const SEARCHABLE_ITEMS = [
     { title: 'Profile', page: 'profile', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> },
     { title: 'Data & Privacy', page: 'data-privacy', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg> },
-    { title: 'Known Bugs', page: 'known-bugs', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H9.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/><path d="m12 6-1 2-2 1 2 1 1 2 1-2 2-1-2-1z"/></svg> },
+    { title: 'Known Bugs', page: 'known-bugs', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 11.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0z"/><path d="M20 18.5a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z"/><path d="M4 18.5a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z"/><path d="M18 12H6"/><path d="M11 3.4a12 12 0 0 1 2 0"/><path d="M17.7 5.2a12 12 0 0 1 1.6 1.6"/><path d="M20.6 11a12 12 0 0 1 0 2"/><path d="M19.4 17.7a12 12 0 0 1-1.6 1.6"/><path d="M13 20.6a12 12 0 0 1-2 0"/><path d="M6.3 19.4a12 12 0 0 1-1.6-1.6"/><path d="M3.4 13a12 12 0 0 1 0-2"/><path d="M5.2 6.3a12 12 0 0 1 1.6-1.6"/></svg> },
     { title: 'Daily Journal', page: 'tracker', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> },
+    { title: 'Cravings Tracker', page: 'cravings-tracker', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h3v8H3zM8 8h3v12H8zM13 4h3v16h-3zM18 16h3v4h-3z"/></svg> },
     { title: 'Goals', page: 'goals', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg> },
     { title: 'Breathing Exercise', page: 'breathing-exercise', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg> },
     { title: '5-4-3-2-1 Method', page: 'five-four-three-two-one', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M7 20h10" /><path d="M10 20v-6l-2-2a3 3 0 0 1-2-2.8V8.2a3 3 0 0 1 2-2.8l2-1.2a3 3 0 0 1 3.2 0l2 1.2a3 3 0 0 1 2 2.8v1a3 3 0 0 1-2 2.8l-2 2v6" /></svg> },
@@ -3298,7 +3586,7 @@ const ProfileMenu = ({ isOpen, onClose, onNavigate }) => {
                             <span>Join our Discord</span>
                         </a>
                         <button className="profile-menu-item" onClick={() => { onNavigate('known-bugs'); onClose(); }}>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H9.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z"/><path d="m12 6-1 2-2 1 2 1 1 2 1-2 2-1-2-1z"/></svg>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 11.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0z"/><path d="M20 18.5a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z"/><path d="M4 18.5a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z"/><path d="M18 12H6"/><path d="M11 3.4a12 12 0 0 1 2 0"/><path d="M17.7 5.2a12 12 0 0 1 1.6 1.6"/><path d="M20.6 11a12 12 0 0 1 0 2"/><path d="M19.4 17.7a12 12 0 0 1-1.6 1.6"/><path d="M13 20.6a12 12 0 0 1-2 0"/><path d="M6.3 19.4a12 12 0 0 1-1.6-1.6"/><path d="M3.4 13a12 12 0 0 1 0-2"/><path d="M5.2 6.3a12 12 0 0 1 1.6-1.6"/></svg>
                             <span>Known Bugs</span>
                         </button>
                     </>
@@ -3359,6 +3647,12 @@ const TrackerHubPage = ({ onBack, onNavigate }) => {
       page: 'tracker',
       icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>,
       description: 'Log your mood and substance use to gain insight.'
+    },
+    {
+      title: 'Cravings Tracker',
+      page: 'cravings-tracker',
+      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M3 12h3v8H3zM8 8h3v12H8zM13 4h3v16h-3zM18 16h3v4h-3z"/></svg>,
+      description: "Track cravings when they happen to build resilience."
     },
     {
       title: 'Goals',
@@ -3532,7 +3826,7 @@ const HomePage = ({ onNavigate, username }) => {
     const [isMenuOpen, setIsMenuOpen] = useState(false);
 
     const homeCards = [
-        { title: 'Your Journey', page: 'journey', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="card-icon"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="16"></line></svg> },
+        { title: 'Your Journey', page: 'journey', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg> },
         { title: 'Tracker', page: 'tracker-hub', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> },
         { title: 'Toolkit', page: 'toolkit', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg> },
         { title: 'Media', page: 'media', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> },
@@ -3645,6 +3939,8 @@ const App = () => {
                 return <TrackerHubPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
             case 'tracker':
                 return <TrackerPage onBack={() => handleNavigation('tracker-hub')} />;
+            case 'cravings-tracker':
+                return <CravingsTrackerPage onBack={() => handleNavigation('tracker-hub')} />;
             case 'toolkit':
                  return <ToolkitPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
             case 'values-exercise':
@@ -3668,7 +3964,7 @@ const App = () => {
             case 'journey':
                  return <JourneyPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
             case 'goals':
-                return <GoalsPage onBack={() => handleNavigation('tracker-hub')} />;
+                return <GoalsPage onBack={() => handleNavigation('tracker-hub')} onNavigate={handleNavigation} />;
             case 'known-bugs':
                 return <KnownBugsPage onBack={() => handleNavigation('home')} />;
             case 'data-privacy':
