@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI } from "@google/genai";
 
@@ -14,6 +14,9 @@ declare global {
     }
     interface Navigator {
         standalone?: boolean;
+        contacts?: {
+            select: (props: string[], opts: { multiple: boolean }) => Promise<any[]>;
+        };
     }
     interface ServiceWorkerRegistration {
         readonly periodicSync: PeriodicSyncManager;
@@ -24,6 +27,370 @@ declare global {
         getTags(): Promise<string[]>;
     }
 }
+
+// --- Achievement Definitions ---
+const ACHIEVEMENTS_DEFINITIONS = {
+    // Journaling
+    'journal_1': { title: 'First Entry', description: 'Log your first journal entry.', icon: '✍️', check: ({ journalHistory }: { journalHistory: any[] }) => journalHistory.length >= 1 },
+    'journal_5': { title: 'Journal Novice', description: 'Log 5 journal entries.', icon: '📓', check: ({ journalHistory }: { journalHistory: any[] }) => journalHistory.length >= 5 },
+    'journal_25': { title: 'Journal Adept', description: 'Log 25 journal entries.', icon: '📚', check: ({ journalHistory }: { journalHistory: any[] }) => journalHistory.length >= 25 },
+    'journal_100': { title: 'Journal Master', description: 'Log 100 journal entries.', icon: '📜', check: ({ journalHistory }: { journalHistory: any[] }) => journalHistory.length >= 100 },
+    'journal_7_days': { title: 'Consistent Logger', description: 'Log an entry for 7 consecutive days.', icon: '🗓️', check: ({ journalHistory }: { journalHistory: { date: string }[] }) => {
+        if (journalHistory.length < 7) return false;
+        const dates = [...new Set(journalHistory.map((e: {date: string}) => new Date(e.date).toDateString()))].map(d => new Date(d).getTime());
+        if (dates.length < 7) return false;
+        dates.sort((a, b) => b - a);
+        for (let i = 0; i < 6; i++) {
+            const diff = dates[i] - dates[i + 1];
+            if (diff > 24 * 60 * 60 * 1000 * 1.5) return false; // Allow 1.5 days for flexibility
+        }
+        return true;
+    }},
+    'journal_moods': { title: 'Full Spectrum', description: 'Log an entry for each of the 6 main mood groups.', icon: '🎨', check: ({ journalHistory }: { journalHistory: { data: { feeling: string } }[] }) => {
+        const moodGroups = new Set();
+        const moodMap = { "Happy": ["Joyful", "Content", "Pleased", "Excited", "Proud", "Optimistic"], "Sad": ["Lonely", "Heartbroken", "Gloomy", "Disappointed", "Hopeless", "Grieving"], "Angry": ["Frustrated", "Annoyed", "Resentful", "Irritated", "Furious", "Jealous"], "Anxious": ["Worried", "Overwhelmed", "Stressed", "Nervous", "Scared", "Insecure"], "Surprised": ["Shocked", "Confused", "Amazed", "Startled", "Awed"], "Calm": ["Peaceful", "Relaxed", "Relieved", "Serene", "Tranquil", "Grateful"] };
+        const reverseMoodMap: { [key: string]: string } = {};
+        for (const group in moodMap) {
+            moodMap[group as keyof typeof moodMap].forEach(feeling => reverseMoodMap[feeling] = group);
+            reverseMoodMap[group] = group;
+        }
+        journalHistory.forEach(entry => {
+            const group = reverseMoodMap[entry.data.feeling];
+            if (group) moodGroups.add(group);
+        });
+        return moodGroups.size >= 6;
+    }},
+    // Sobriety
+    'sober_1_day': { title: 'Day One', description: 'Achieve 24 hours of sobriety.', icon: '☀️', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 86400000 },
+    'sober_3_days': { title: 'Three Days', description: 'Achieve 3 days of sobriety.', icon: '🥉', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 3 * 86400000 },
+    'sober_1_week': { title: 'One Week', description: 'Achieve 1 week of sobriety.', icon: '🥈', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 7 * 86400000 },
+    'sober_2_weeks': { title: 'Two Weeks', description: 'Achieve 2 weeks of sobriety.', icon: '🏅', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 14 * 86400000 },
+    'sober_1_month': { title: 'One Month', description: 'Achieve 1 month of sobriety.', icon: '🥇', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 30 * 86400000 },
+    'sober_3_months': { title: 'Three Months', description: 'Achieve 3 months of sobriety.', icon: '🏆', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 90 * 86400000 },
+    'sober_6_months': { title: 'Six Months', description: 'Achieve 6 months of sobriety.', icon: '💎', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 182 * 86400000 },
+    'sober_1_year': { title: 'One Year!', description: 'Achieve a full year of sobriety.', icon: '🎉', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 365 * 86400000 },
+    // Cravings
+    'craving_1': { title: 'First Craving Logged', description: 'Log your first craving.', icon: '📈', check: ({ cravingsHistory }: { cravingsHistory: any[] }) => cravingsHistory.length >= 1 },
+    'craving_10': { title: 'Craving Analyst', description: 'Log 10 cravings.', icon: '📊', check: ({ cravingsHistory }: { cravingsHistory: any[] }) => cravingsHistory.length >= 10 },
+    'craving_25': { title: 'Pattern Seeker', description: 'Log 25 cravings to better understand your triggers.', icon: '🧠', check: ({ cravingsHistory }: { cravingsHistory: any[] }) => cravingsHistory.length >= 25 },
+    // Tool Usage
+    'tool_first_use': { title: 'First Step', description: 'Use any tool for the first time.', icon: '🛠️', check: (data: any) => Object.keys(data).some(key => key.endsWith('History') && data[key].length > 0) || ['safetyPlan', 'relapsePreventionPlan'].some(key => Object.keys(data[key]).length > 0) || data.goals.length > 0 },
+    'tool_breathing_1': { title: 'Deep Breather', description: 'Complete a breathing exercise.', icon: '😮‍💨', check: ({ breathingHistory }: { breathingHistory: any[] }) => breathingHistory.length >= 1 },
+    'tool_breathing_10': { title: 'Zen Master', description: 'Complete 10 breathing exercises.', icon: '🧘', check: ({ breathingHistory }: { breathingHistory: any[] }) => breathingHistory.length >= 10 },
+    'tool_grounding_1': { title: 'Grounded', description: 'Complete the 5-4-3-2-1 exercise.', icon: '👣', check: ({ groundingHistory }: { groundingHistory: any[] }) => groundingHistory.length >= 1 },
+    'tool_grounding_10': { title: 'Centered', description: 'Complete 10 grounding exercises.', icon: '🌳', check: ({ groundingHistory }: { groundingHistory: any[] }) => groundingHistory.length >= 10 },
+    'tool_values_1': { title: 'Self-Aware', description: 'Complete the Core Values exercise.', icon: '🧭', check: ({ valuesHistory }: { valuesHistory: any[] }) => valuesHistory.length >= 1 },
+    'tool_values_2': { title: 'Re-evaluation', description: 'Complete the Core Values exercise more than once.', icon: '🗺️', check: ({ valuesHistory }: { valuesHistory: any[] }) => valuesHistory.length >= 2 },
+    'tool_safety_plan': { title: 'Planner', description: 'Start your Safety Plan.', icon: '🛡️', check: ({ safetyPlan }: { safetyPlan: object }) => Object.keys(safetyPlan).length > 0 },
+    'tool_safety_plan_full': { title: 'Well Prepared', description: 'Fill out every section of the Safety Plan.', icon: '🏰', check: ({ safetyPlan }: { safetyPlan: { [key: string]: any } }) => Object.values(safetyPlan).filter(v => (Array.isArray(v) ? v.length > 0 : !!v)).length >= 7 },
+    'tool_relapse_plan_start': { title: 'Prevention Planner', description: 'Start your Relapse Prevention Plan.', icon: '🛤️', check: ({ relapsePreventionPlan }: { relapsePreventionPlan: object }) => Object.keys(relapsePreventionPlan).length > 0 },
+    'tool_relapse_plan_full': { title: 'Forward Thinker', description: 'Fill out every section of the Relapse Prevention Plan.', icon: '🗺️', check: ({ relapsePreventionPlan }: { relapsePreventionPlan: { [key: string]: any } }) => Object.values(relapsePreventionPlan).filter(v => (Array.isArray(v) ? v.length > 0 : !!v)).length >= 4 },
+    'tool_goal_setter': { title: 'Goal Setter', description: 'Create your first S.M.A.R.T. goal.', icon: '🎯', check: ({ goals }: { goals: any[] }) => goals.length >= 1 },
+    'tool_know_drugs': { title: 'Educational Explorer', description: 'Visit the "Know Your Drugs" educational playlist.', icon: '🎓', check: ({ events }: { events: string[] }) => events.includes('know_your_drugs') },
+    'tool_audit_1': { title: 'Self-Reflection', description: 'Complete the AUDIT screener for the first time.', icon: '🔍', check: ({ auditHistory }: { auditHistory: any[] }) => auditHistory.length >= 1 },
+    'tool_audit_2': { title: 'Check-in', description: 'Complete the AUDIT screener more than once.', icon: '🔄', check: ({ auditHistory }: { auditHistory: any[] }) => auditHistory.length >= 2 },
+    'tool_adhd_1': { title: 'Insight Seeker', description: 'Complete the ADHD screener for the first time.', icon: '💡', check: ({ adhdHistory }: { adhdHistory: any[] }) => adhdHistory.length >= 1 },
+    'tool_adhd_2': { title: 'Self-Awareness Check', description: 'Complete the ADHD screener more than once.', icon: '🤔', check: ({ adhdHistory }: { adhdHistory: any[] }) => adhdHistory.length >= 2 },
+    'tool_gratitude_1': { title: 'Grateful Heart', description: 'Log your first gratitude entry.', icon: '💖', check: ({ gratitudeHistory }: { gratitudeHistory: any[] }) => gratitudeHistory.length >= 1 },
+    'tool_gratitude_10': { title: 'Attitude of Gratitude', description: 'Log 10 gratitude entries.', icon: '✨', check: ({ gratitudeHistory }: { gratitudeHistory: any[] }) => gratitudeHistory.length >= 10 },
+    'tool_thought_diary_1': { title: 'Mindful Observer', description: 'Complete your first Thought Diary entry.', icon: '🧐', check: ({ thoughtDiaryHistory }: { thoughtDiaryHistory: any[] }) => thoughtDiaryHistory.length >= 1 },
+    'tool_thought_diary_5': { title: 'Cognitive Reframer', description: 'Complete 5 Thought Diary entries.', icon: '🔄', check: ({ thoughtDiaryHistory }: { thoughtDiaryHistory: any[] }) => thoughtDiaryHistory.length >= 5 },
+    'tool_meditation_1': { title: 'Inner Peace', description: 'Complete your first Guided Meditation.', icon: '🧘‍♀️', check: ({ meditationHistory }: { meditationHistory: any[] }) => meditationHistory.length >= 1 },
+    'tool_meditation_5': { title: 'Meditation Regular', description: 'Complete 5 Guided Meditations.', icon: '🕉️', check: ({ meditationHistory }: { meditationHistory: any[] }) => meditationHistory.length >= 5 },
+    // Goals
+    'goal_complete_1': { title: 'Goal Achiever', description: 'Complete your first goal.', icon: '✔️', check: ({ goals }: { goals: { status: string }[] }) => goals.some(g => g.status === 'completed') },
+    'goal_complete_5': { title: 'High Achiever', description: 'Complete 5 goals.', icon: '🌟', check: ({ goals }: { goals: { status: string }[] }) => goals.filter(g => g.status === 'completed').length >= 5 },
+    'goal_complete_10': { title: 'Unstoppable', description: 'Complete 10 goals.', icon: '🚀', check: ({ goals }: { goals: { status: string }[] }) => goals.filter(g => g.status === 'completed').length >= 10 },
+    'goal_value_aligned': { title: 'Value-Aligned', description: 'Create a goal linked to one of your core values.', icon: '🔗', check: ({ goals }: { goals: { relevantValues?: string[] }[] }) => goals.some(g => g.relevantValues && g.relevantValues.length > 0) },
+    // Financial
+    'financial_100': { title: 'Money Saver', description: 'Save $100 by tracking substance costs.', icon: '💰', check: ({ journalHistory }: { journalHistory: { data: { cost?: string } }[] }) => journalHistory.reduce((sum, e) => sum + (parseFloat(e.data.cost || '0') || 0), 0) >= 100 },
+    'financial_500': { title: 'Smart Spender', description: 'Save $500 by tracking substance costs.', icon: '💵', check: ({ journalHistory }: { journalHistory: { data: { cost?: string } }[] }) => journalHistory.reduce((sum, e) => sum + (parseFloat(e.data.cost || '0') || 0), 0) >= 500 },
+    'financial_1000': { title: 'Financially Savvy', description: 'Save $1000 by tracking substance costs.', icon: '🏦', check: ({ journalHistory }: { journalHistory: { data: { cost?: string } }[] }) => journalHistory.reduce((sum, e) => sum + (parseFloat(e.data.cost || '0') || 0), 0) >= 1000 },
+    // Engagement
+    'engagement_3_days': { title: 'Welcome Back', description: 'Open the app on 3 different days.', icon: '👋', check: ({ loginHistory }: { loginHistory: string[] }) => new Set(loginHistory.map(d => new Date(d).toDateString())).size >= 3 },
+    'engagement_7_days': { title: 'Regular User', description: 'Open the app on 7 different days.', icon: '🤗', check: ({ loginHistory }: { loginHistory: string[] }) => new Set(loginHistory.map(d => new Date(d).toDateString())).size >= 7 },
+    'engagement_30_days': { title: 'Committed', description: 'Open the app on 30 different days.', icon: '💖', check: ({ loginHistory }: { loginHistory: string[] }) => new Set(loginHistory.map(d => new Date(d).toDateString())).size >= 30 },
+    'engagement_night_owl': { title: 'Night Owl', description: 'Log an entry between 10 PM and 4 AM.', icon: '🦉', check: ({ journalHistory }: { journalHistory: { date: string }[] }) => journalHistory.some(e => { const h = new Date(e.date).getHours(); return h >= 22 || h < 4; }) },
+    'engagement_early_bird': { title: 'Early Bird', description: 'Log an entry between 4 AM and 8 AM.', icon: '🐦', check: ({ journalHistory }: { journalHistory: { date: string }[] }) => journalHistory.some(e => { const h = new Date(e.date).getHours(); return h >= 4 && h < 8; }) },
+    'engagement_3_tools': { title: 'Explorer', description: 'Use 3 different tools.', icon: '🗺️', check: (data: any) => ['groundingHistory', 'breathingHistory', 'valuesHistory', 'safetyPlan', 'goals', 'auditHistory', 'adhdHistory', 'gratitudeHistory', 'thoughtDiaryHistory', 'meditationHistory', 'relapsePreventionPlan'].filter(k => data[k] && (Array.isArray(data[k]) ? data[k].length > 0 : Object.keys(data[k]).length > 0)).length >= 3 },
+    'engagement_all_tools': { title: 'Toolkit Master', description: 'Use all available tools at least once.', icon: '🧰', check: (data: any) => ['groundingHistory', 'breathingHistory', 'valuesHistory', 'safetyPlan', 'goals', 'auditHistory', 'adhdHistory', 'gratitudeHistory', 'thoughtDiaryHistory', 'meditationHistory', 'relapsePreventionPlan'].every(k => data[k] && (Array.isArray(data[k]) ? data[k].length > 0 : Object.keys(data[k]).length > 0)) },
+    'engagement_profile_full': { title: 'Profile Complete', description: 'Fill out all fields in your profile.', icon: '🆔', check: ({ userProfile }: { userProfile: object }) => userProfile && Object.values(userProfile).every(v => v !== '') },
+    'engagement_discord': { title: 'Community Member', description: 'Visit the Discord Community.', icon: '💬', check: ({ events }: { events: string[] }) => events.includes('discord_visit') },
+    'engagement_1_month_user': { title: 'One Month In', description: 'Use the app for a month since your first entry.', icon: '🌱', check: ({ journalHistory }: { journalHistory: { date: string }[] }) => journalHistory.length > 0 && (new Date().getTime() - new Date(journalHistory[journalHistory.length - 1].date).getTime()) >= 30 * 86400000 },
+    'engagement_25_unlocked': { title: 'Quarter Century', description: 'Unlock 25 achievements.', icon: '🌟', check: ({ unlockedAchievements }: { unlockedAchievements: any[] }) => unlockedAchievements.length >= 25 },
+    'engagement_40_unlocked': { title: 'Almost There', description: 'Unlock 40 achievements.', icon: '🌠', check: ({ unlockedAchievements }: { unlockedAchievements: any[] }) => unlockedAchievements.length >= 40 },
+    'engagement_share_plan': { title: 'Helping Hand', description: 'Share your safety plan with a contact.', icon: '💌', check: ({ events }: { events: string[] }) => events.includes('share_safety_plan') },
+    'engagement_weekend': { title: 'Weekend Warrior', description: 'Log an entry on a Saturday and a Sunday.', icon: '😎', check: ({ journalHistory }: { journalHistory: { date: string }[] }) => { const days = new Set(journalHistory.map(e => new Date(e.date).getDay())); return days.has(6) && days.has(0); }},
+    'engagement_full_house': { title: 'Full House', description: 'Have at least one entry in Journal, Cravings, and Goals.', icon: '🏡', check: ({ journalHistory, cravingsHistory, goals }: { journalHistory: any[], cravingsHistory: any[], goals: any[] }) => journalHistory.length > 0 && cravingsHistory.length > 0 && goals.length > 0 }
+};
+
+// --- Single Source of Truth for All Tools ---
+const ALL_TOOLS = [
+    {
+        id: 'journal',
+        title: 'Daily Journal',
+        subtitle: 'Log mood and substance use',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 14h-8v-2h8v2zm0-4h-8v-2h8v2zM13 9V3.5L18.5 9H13z"/></svg>,
+        navigate: 'journal',
+        category: 'Trackers',
+    },
+    {
+        id: 'gratitude',
+        title: 'Gratitude Log',
+        subtitle: 'Record things you are thankful for',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>,
+        navigate: 'gratitude',
+        category: 'Trackers',
+    },
+    {
+        id: 'cravings',
+        title: 'Craving Tracker',
+        subtitle: 'Monitor and manage cravings',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 3c-1.74 0-3.41.81-4.5 2.09C10.91 3.81 9.24 3 7.5 3 4.42 3 2 5.42 2 8.5c0 3.78 3.4 6.86 8.55 11.54L12 21.35l1.45-1.32C18.6 15.36 22 12.28 22 8.5 22 5.42 19.58 3 16.5 3zm-4.4 15.55l-.1.1-.1-.1C7.14 14.24 4 11.39 4 8.5 4 6.5 5.5 5 7.5 5c1.54 0 3.04.99 3.57 2.36h1.87C13.46 5.99 14.96 5 16.5 5c2 0 3.5 1.5 3.5 3.5 0 2.89-3.14 5.74-7.9 10.05z"/></svg>,
+        navigate: 'cravings',
+        category: 'Trackers',
+    },
+    {
+        id: 'breathing',
+        title: 'Breathing',
+        subtitle: 'Calm your mind and body',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 6.5c-2.49 0-4.5 2.01-4.5 4.5s2.01 4.5 4.5 4.5 4.5-2.01 4.5-4.5-2.01-4.5-4.5-4.5zm0 7c-1.38 0-2.5-1.12-2.5-2.5S10.62 8.5 12 8.5s2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>,
+        navigate: 'breathing',
+        category: 'Exercises',
+    },
+    {
+        id: 'meditation',
+        title: 'Guided Meditation',
+        subtitle: 'Audio exercises for mindfulness',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM15.5 12c0-1.93-1.57-3.5-3.5-3.5S8.5 10.07 8.5 12H7c0-2.76 2.24-5 5-5s5 2.24 5 5h-1.5z"/></svg>,
+        navigate: 'meditation',
+        category: 'Exercises',
+    },
+    {
+        id: 'grounding',
+        title: '5-4-3-2-1',
+        subtitle: 'Grounding technique',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M5 15.5c0 2.54 1.63 4.78 3.93 5.61.4.15.87.15 1.27 0C12.5 20.28 14.13 18.04 14.13 15.5V11H5v4.5zM19 11h-3.13c0-2.54-1.63-4.78-3.93-5.61-.4-.15-.87-.15-1.27 0C8.5 6.22 6.87 8.46 6.87 11H3c0-4.99 4.02-9 9-9s9 4.01 9 9z"/></svg>,
+        navigate: 'grounding',
+        category: 'Exercises',
+    },
+    {
+        id: 'thought-diary',
+        title: 'Thought Diary',
+        subtitle: 'CBT-based thought reframing',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-11h2v2h-2v-2zm0 4h2v6h-2v-6z"/></svg>,
+        navigate: 'thought-diary',
+        category: 'Exercises',
+    },
+    {
+        id: 'values',
+        title: 'Core Values',
+        subtitle: 'Discover your guiding principles',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 8.5l10 13.5L22 8.5L12 2zm0 2.31l7.5 5.19L12 18.31L4.5 9.5L12 4.31z"/></svg>,
+        navigate: 'values-exercise',
+        category: 'Exercises',
+    },
+    {
+        id: 'safety-plan',
+        title: 'Safety Plan',
+        subtitle: 'Your guide for tough moments',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>,
+        navigate: 'safety-plan',
+        category: 'Exercises',
+    },
+    {
+        id: 'relapse-prevention',
+        title: 'Relapse Prevention',
+        subtitle: 'Plan for handling triggers',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9v-2h2v2zm0-4H9V7h2v5zm4 4h-2v-2h2v2zm0-4h-2V7h2v5z"/></svg>,
+        navigate: 'relapse-prevention',
+        category: 'Exercises',
+    },
+    {
+        id: 'audit',
+        title: 'AUDIT Screener',
+        subtitle: 'Alcohol Use Disorders Identification Test',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M19 3h-4.18C14.4 1.84 13.3 1 12 1s-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm-2 14l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>,
+        navigate: 'audit',
+        category: 'Exercises',
+    },
+    {
+        id: 'adhd',
+        title: 'ADHD Screener',
+        subtitle: 'Adult Self-Report Scale (ASRS)',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4C9.24 4 7 6.24 7 9c0 2.24 1.76 4.09 4 4.43V19h2v-5.57c2.24-.34 4-2.19 4-4.43 0-2.76-2.24-5-5-5zm-3.5 5c-.83 0-1.5-.67-1.5-1.5S7.67 6 8.5 6s1.5.67 1.5 1.5S9.33 9 8.5 9zm3.5 2c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.5-2c-.83 0-1.5-.67-1.5-1.5S14.67 6 15.5 6s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>,
+        navigate: 'adhd',
+        category: 'Exercises',
+    },
+    {
+        id: 'know-your-drugs',
+        title: 'Know Your Drugs',
+        subtitle: 'Educational video playlist',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.11 0-2 .89-2 2v12c0 1.1.89 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.11-.9-2-2-2zm0 14H3V5h18v12zm-5-6l-7 4V7l7 4z"/></svg>,
+        navigate: 'https://www.youtube.com/playlist?list=PL1MHtsikpzrlXgHVnVD2txdA2weD0xDFX',
+        category: 'Exercises',
+        external: true,
+    },
+    {
+        id: 'goals',
+        title: 'My Goals',
+        subtitle: 'Set and track S.M.A.R.T. goals',
+        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>,
+        navigate: 'goals',
+        category: 'Growth',
+    }
+];
+
+// --- Type Definitions for History ---
+interface AuditHistoryEntry {
+    score: number;
+    date: string;
+}
+
+interface AdhdHistoryEntry {
+    score: number;
+    date: string;
+    answers: { [key: number]: number };
+}
+
+interface JournalHistoryEntry {
+    date: string;
+    data: {
+        feeling: string;
+        substance: string;
+        place?: string;
+        amount: string;
+        unit: string;
+        cost?: string;
+    };
+}
+
+interface CravingsHistoryEntry {
+    date: string;
+    intensity: number;
+    trigger?: string;
+    copingMechanism?: string;
+}
+
+interface GoalEntry {
+    id: string;
+    title: string; // Specific
+    measurable: string;
+    achievable: string;
+    relevant: string;
+    relevantValues?: string[]; // Optional linked values
+    targetDate: string; // Time-bound
+    status: 'active' | 'completed';
+    createdAt: string;
+}
+
+interface GratitudeEntry {
+    date: string;
+    items: string[];
+}
+
+interface ThoughtDiaryEntry {
+    date: string;
+    data: {
+        situation: string;
+        thoughts: string;
+        feelings: string;
+        evidenceFor: string;
+        evidenceAgainst: string;
+        alternativeThought: string;
+        outcome: string;
+    };
+}
+
+interface MeditationEntry {
+    date: string;
+    title: string;
+    duration: number; // in seconds
+}
+
+interface ValuesHistoryEntry {
+    date: string;
+    top5: string[];
+}
+
+
+// --- Toast Notification Component ---
+const Toast = ({ message, icon, onClose }) => {
+    useEffect(() => {
+        const timer = setTimeout(onClose, 4000);
+        return () => clearTimeout(timer);
+    }, [onClose]);
+
+    return (
+        <div className="toast-notification">
+            <div className="toast-icon">{icon}</div>
+            <div className="toast-content">
+                <p className="toast-title">Achievement Unlocked!</p>
+                <p className="toast-message">{message}</p>
+            </div>
+        </div>
+    );
+};
+
+// --- Reusable Info Tooltip Component ---
+const InfoTooltip = ({ text }) => {
+    return (
+        <div className="info-tooltip-container">
+            <svg className="info-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+            <span className="tooltip-text">{text}</span>
+        </div>
+    );
+};
+
+
+// --- Achievements Page Component ---
+const AchievementsPage = ({ navigate }) => {
+    const [unlockedAchievements, setUnlockedAchievements] = useState<string[]>([]);
+
+    useEffect(() => {
+        setUnlockedAchievements(JSON.parse(localStorage.getItem('unlockedAchievements') || '[]') as string[]);
+    }, []);
+
+    const totalAchievements = Object.keys(ACHIEVEMENTS_DEFINITIONS).length;
+    const unlockedCount = unlockedAchievements.length;
+    const progress = totalAchievements > 0 ? (unlockedCount / totalAchievements) * 100 : 0;
+
+    return (
+        <div className="page-container achievements-page">
+            <header className="page-header-text" style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                <button onClick={() => navigate('journey')} className="back-button" aria-label="Go Back to Journey">
+                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                 <h1 className="app-title">My Achievements</h1>
+            </header>
+            <main>
+                <div className="card no-hover achievements-progress-card">
+                    <h3>Your Progress</h3>
+                    <p>{unlockedCount} / {totalAchievements} Unlocked</p>
+                    <div className="achievements-progress-bar-container">
+                        <div className="achievements-progress-bar" style={{ width: `${progress}%` }}></div>
+                    </div>
+                </div>
+
+                <div className="achievements-grid">
+                    {Object.entries(ACHIEVEMENTS_DEFINITIONS).map(([key, achievement]) => {
+                        const isUnlocked = unlockedAchievements.includes(key);
+                        return (
+                            <div key={key} className={`achievement-card ${isUnlocked ? 'unlocked' : 'locked'}`}>
+                                <div className="achievement-icon">{achievement.icon}</div>
+                                <div className="achievement-details">
+                                    <h4 className="achievement-title">{achievement.title}</h4>
+                                    <p className="achievement-description">{achievement.description}</p>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </main>
+        </div>
+    );
+};
+
 
 // --- Google Analytics Utility ---
 export const trackEvent = (action: string, category: string, label?: string, value?: number) => {
@@ -84,7 +451,9 @@ const LoginPage = ({ onLoginSuccess }) => {
             const userProfile = {
                 username: username.trim(),
                 gender: '',
-                dob: ''
+                dob: '',
+                emergencyContactName: '',
+                emergencyContactPhone: ''
             };
             localStorage.setItem('userProfile', JSON.stringify(userProfile));
             localStorage.removeItem('username'); // Clean up old key
@@ -138,13 +507,7 @@ const LoginPage = ({ onLoginSuccess }) => {
     };
 
     const handleConfirmDelete = () => {
-        localStorage.removeItem('userPIN');
-        localStorage.removeItem('username');
-        localStorage.removeItem('userProfile');
-        localStorage.removeItem('journalHistory');
-        localStorage.removeItem('coreValues');
-        localStorage.removeItem('groundingHistory');
-        localStorage.removeItem('goals');
+        localStorage.clear(); // Clear all data
         setShowConfirmModal(false);
         window.location.reload(); // Reload the app to reset its state
     };
@@ -160,129 +523,118 @@ const LoginPage = ({ onLoginSuccess }) => {
                 <div className="login-container">
                     <div className="app-logo-container">
                         <svg className="logo-graphic" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M45,95 C40,75 60,65 50,45 C30,30 40,10 50,0 C60,10 70,30 50,45 C60,65 40,75 55,95 Z" fill="currentColor"/>
+                            <circle cx="50" cy="50" r="45" stroke="currentColor" strokeWidth="8"/>
+                            <path d="M50 50 L 78 22 L 65 65 Z" fill="currentColor" stroke="currentColor" strokeLinejoin="round" strokeWidth="4" />
+                            <path d="M50 50 L 22 78 L 35 35 Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="4" />
                         </svg>
-                        <h1 className="logo-text">YOUR JOURNEY,<br />YOUR TOOLS</h1>
+                        <h1 className="logo-text">Your Journey<br/>Your Tools</h1>
                     </div>
-                    <form className="card login-card" onSubmit={handleUsernameSubmit}>
-                        <h2>Create a Username</h2>
-                        <p className="app-subtitle" style={{marginBottom: '1.5rem', marginTop: '-0.5rem', width: '100%'}}>This will be used to greet you.</p>
-                        <div className="form-group" style={{textAlign: 'left', width: '100%', marginBottom: 'rem'}}>
-                            <label htmlFor="username-input" style={{marginBottom: '0.5rem'}}>Username</label>
-                            <input
-                                id="username-input"
-                                type="text"
-                                placeholder="Enter your name"
-                                value={username}
-                                onChange={(e) => {
-                                    setUsername(e.target.value);
-                                    setError('');
-                                }}
-                                autoFocus
-                            />
-                        </div>
-                        {error && <p className="pin-error" style={{marginBottom: '1rem'}}>{error}</p>}
-                        <button type="submit" className="log-button" style={{width: '100%', marginTop: '0.5rem'}} disabled={!username.trim()}>
-                            Save & Enter
-                        </button>
-                    </form>
+                    <div className="card login-card">
+                        <h2>Create Your Profile</h2>
+                        <form onSubmit={handleUsernameSubmit}>
+                            <div className="form-group">
+                                <label htmlFor="username">What should we call you?</label>
+                                <input
+                                    id="username"
+                                    type="text"
+                                    value={username}
+                                    onChange={(e) => setUsername(e.target.value)}
+                                    placeholder="Enter your name or nickname"
+                                    autoFocus
+                                />
+                            </div>
+                            {error && <p className="pin-error">{error}</p>}
+                            <button type="submit" className="log-button" style={{marginTop: '1.5rem'}}>Get Started</button>
+                        </form>
+                    </div>
                 </div>
             </div>
         );
     }
-
-    const getTitle = () => {
+    
+    const getPinTitle = () => {
         switch(setupStage) {
-            case 'login': return "Enter Your PIN";
-            case 'createPin': return "Create a 4-Digit PIN";
-            case 'confirmPin': return "Confirm Your New PIN";
-            default: return "Welcome";
+            case 'login': return 'Enter Your PIN';
+            case 'createPin': return 'Create a 4-Digit PIN';
+            case 'confirmPin': return 'Confirm Your PIN';
+            default: return '';
         }
     };
-
-    const title = getTitle();
-    const buttonText = (setupStage === 'login' || setupStage === 'confirmPin') ? "Unlock" : "Create PIN";
 
     return (
         <div className="page-container">
             <div className="login-container">
                 <div className="app-logo-container">
                     <svg className="logo-graphic" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M45,95 C40,75 60,65 50,45 C30,30 40,10 50,0 C60,10 70,30 50,45 C60,65 40,75 55,95 Z" fill="currentColor"/>
+                        <circle cx="50" cy="50" r="45" stroke="currentColor" strokeWidth="8"/>
+                        <path d="M50 50 L 78 22 L 65 65 Z" fill="currentColor" stroke="currentColor" strokeLinejoin="round" strokeWidth="4" />
+                        <path d="M50 50 L 22 78 L 35 35 Z" stroke="currentColor" strokeLinejoin="round" strokeWidth="4" />
                     </svg>
-                    <h1 className="logo-text">YOUR JOURNEY,<br />YOUR TOOLS</h1>
+                    <h1 className="logo-text">Your Journey<br/>Your Tools</h1>
                 </div>
+
                 <div className="card login-card">
-                    <h2>{title}</h2>
+                    <h2>{getPinTitle()}</h2>
                     <div className="pin-input-container">
                         {[0, 1, 2, 3].map(i => (
                             <div key={i} className={`pin-dot ${pin.length > i ? 'filled' : ''} ${flashingDotIndex === i ? 'flashing' : ''}`}></div>
                         ))}
                     </div>
-                    {error && <p className="pin-error">{error}</p>}
-                    <div className="pin-keypad">
-                        {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
-                            <button key={num} onClick={() => handlePinChange(num.toString())} className={flickeringButton === num.toString() ? 'flickering' : ''}>{num}</button>
-                        ))}
-                        <button onClick={handleDelete}>Del</button>
-                        <button onClick={() => handlePinChange('0')} className={flickeringButton === '0' ? 'flickering' : ''}>0</button>
-                        <button onClick={handlePinSubmit} className="confirm-button" disabled={pin.length !== 4} aria-label={buttonText}>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"></path><path d="M12 5l7 7-7 7"></path></svg>
-                        </button>
-                    </div>
-                     {setupStage === 'login' && (
-                        <button onClick={handleForgotPin} className="forgot-pin-button">
-                            Forgot PIN?
-                        </button>
-                    )}
+                    <div className="pin-error">{error}</div>
+                    <form onSubmit={handlePinSubmit}>
+                        <div className="pin-keypad">
+                            {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+                                <button type="button" key={num} onClick={() => handlePinChange(num.toString())} className={flickeringButton === num.toString() ? 'flickering' : ''}>{num}</button>
+                            ))}
+                            <button type="button" onClick={handleDelete} aria-label="Delete">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M21 11H6.83l3.58-3.59L9 6l-6 6 6 6 1.41-1.41L6.83 13H21v-2Z" fill="currentColor"/></svg>
+                            </button>
+                            <button type="button" onClick={() => handlePinChange('0')} className={flickeringButton === '0' ? 'flickering' : ''}>0</button>
+                            <button type="submit" className="confirm-button" disabled={pin.length < 4} aria-label="Confirm PIN">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17Z" fill="currentColor"/></svg>
+                            </button>
+                        </div>
+                    </form>
+                    {setupStage === 'login' && <button className="forgot-pin-button" onClick={handleForgotPin}>Forgot PIN?</button>}
                 </div>
             </div>
 
             {showConfirmModal && (
                 <div className="confirm-modal-overlay">
-                    <div className="confirm-modal-content card">
-                        <h3>Are you sure?</h3>
-                        <p>This will permanently delete your stored PIN and all journal history. This action cannot be undone.</p>
-                        
-                        <div className="form-group" style={{textAlign: 'left', width: '100%', margin: '1rem 0'}}>
-                            <label htmlFor="confirm-delete-input" style={{color: 'var(--error-color)'}}>To confirm, type "DELETE" below:</label>
+                    <div className="card confirm-modal-content">
+                        <h3>Reset Your Account?</h3>
+                        <p>Forgetting your PIN requires resetting the app. This will permanently delete all your data, including your PIN, profile, and all journal entries. This action cannot be undone.</p>
+                        <p style={{ marginTop: '1rem' }}>Please type "<strong>delete</strong>" to confirm.</p>
+                        <div className="form-group" style={{ marginTop: '1rem' }}>
                             <input
-                                id="confirm-delete-input"
                                 type="text"
                                 value={confirmDeleteText}
                                 onChange={(e) => setConfirmDeleteText(e.target.value)}
-                                autoComplete="off"
+                                placeholder='Type to confirm...'
                                 autoFocus
                             />
                         </div>
-
                         <div className="confirm-modal-actions">
-                            <button onClick={() => setShowConfirmModal(false)} className="modal-button cancel">Cancel</button>
-                            <button 
-                                onClick={handleConfirmDelete} 
-                                className="modal-button confirm"
-                                disabled={confirmDeleteText !== 'DELETE'}
-                            >
-                                Confirm Deletion
-                            </button>
+                            <button className="modal-button cancel" onClick={() => setShowConfirmModal(false)}>Cancel</button>
+                            <button className="modal-button confirm" onClick={handleConfirmDelete} disabled={confirmDeleteText !== 'delete'}>Reset and Delete</button>
                         </div>
                     </div>
                 </div>
             )}
-            
-            {showPrivacyModal && (
+             {showPrivacyModal && (
                 <div className="confirm-modal-overlay">
-                    <div className="confirm-modal-content card" style={{textAlign: 'left', alignItems: 'flex-start'}}>
-                        <h3 style={{color: 'var(--accent-teal)', alignSelf: 'center'}}>Data Privacy & Storage</h3>
-                         <p style={{ lineHeight: 1.7 }}>
-                           Your data, including journal entries and goals, is saved directly in your browser's local storage. This means your information is private to you and is not sent to any server.
-                         </p>
-                         <p style={{ lineHeight: 1.7, fontWeight: 600, color: 'var(--orange-accent)' }}>
-                           To ensure your data persists, it is highly recommended to use the same browser and device for this application. Clearing your browser's cache or data may permanently delete all your saved information.
-                         </p>
-                         <div className="confirm-modal-actions" style={{justifyContent: 'center', marginTop: '1rem'}}>
-                             <button onClick={handlePrivacyAccept} className="modal-button" style={{backgroundColor: 'var(--accent-teal)', color: 'var(--bg-dark)'}}>Okay</button>
-                         </div>
+                    <div className="card confirm-modal-content">
+                        <h3>Your Privacy Matters</h3>
+                        <p style={{textAlign: 'left'}}>
+                            <strong>Your Journey, Your Tools</strong> is a privacy-focused application. All the data you enter, including your PIN, journal entries, goals, and personal information, is stored <strong>exclusively on your device</strong>.
+                            <br/><br/>
+                            We do not have a server, and we do not collect, view, or share any of your personal data. This means your information remains private to you.
+                             <br/><br/>
+                            The only exception is the optional, anonymous usage data we collect via Google Analytics to help us understand which features are most used and improve the app.
+                        </p>
+                        <div className="confirm-modal-actions" style={{justifyContent: 'center'}}>
+                            <button className="modal-button confirm" style={{backgroundColor: 'var(--accent-teal)', color: 'var(--bg-dark)'}} onClick={handlePrivacyAccept}>I Understand</button>
+                        </div>
                     </div>
                 </div>
             )}
@@ -290,3851 +642,3541 @@ const LoginPage = ({ onLoginSuccess }) => {
     );
 };
 
-
-const substanceList = [
-    "Select Substance", "Alcohol", "Cannabis", "Cocaine", "MDMA (Ecstasy)", "Heroin", "GBH (Fanta)",
-    "Methamphetamine (Ice)", "Inhalants", "Ketamine", "LSD (Acid)", "Other"
-];
-
-const substanceUnits: { [key: string]: string[] } = {
-    'Alcohol': ['Standard Drink(s)', 'Shot(s)', 'Glass(es)', 'Bottle(s)', 'Can(s)'],
-    'Cannabis': ['Gram(s)', 'Joint(s)', 'Cone(s)', 'Pipe(s)'],
-    'Cocaine': ['Gram(s)', 'Line(s)', 'Point(s)'],
-    'MDMA (Ecstasy)': ['Pill(s)', 'Cap(s)', 'Point(s)'],
-    'Heroin': ['Point(s)', 'Gram(s)', 'Shot(s)'],
-    'GBH (Fanta)': ['ml', 'Dose(s)'],
-    'Methamphetamine (Ice)': ['Point(s)', 'Gram(s)'],
-    'Inhalants': ['Can(s)', 'Nang(s)'],
-    'Ketamine': ['Bump(s)', 'Line(s)', 'Gram(s)'],
-    'LSD (Acid)': ['Tab(s)', 'Drop(s)'],
-    'Other': ['Unit(s)', 'mg', 'ml', 'Pill(s)']
-};
-
-const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-const quotes = [
-    { quote: "The best way to predict the future is to create it.", author: "Abraham Lincoln" },
-    { quote: "You are never too old to set another goal or to dream a new dream.", author: "C.S. Lewis" },
-    { quote: "Believe you can and you're halfway there.", author: "Theodore Roosevelt" },
-    { quote: "The secret of getting ahead is getting started.", author: "Mark Twain" },
-    { quote: "It does not matter how slowly you go as long as you do not stop.", author: "Confucius" },
-    { quote: "The only way to do great work is to love what you do.", author: "Steve Jobs" },
-    { quote: "Success is not final, failure is not fatal: it is the courage to continue that counts.", author: "Winston Churchill" },
-    { quote: "Your limitation is only your imagination.", author: "Unknown" },
-    { quote: "The future belongs to those who believe in the beauty of their dreams.", author: "Eleanor Roosevelt" },
-    { quote: "What you get by achieving your goals is not as important as what you become by achieving your goals.", author: "Zig Ziglar" },
-];
-
-type FeelingNode = {
-    color?: string;
-    children?: { [key: string]: FeelingNode };
-};
-
-const feelingsWheelData: { [key: string]: FeelingNode } = {
-    Happy: {
-        color: 'hsl(45, 86%, 53%)',
-        children: {
-            Playful: { children: { Aroused: {}, Cheeky: {} } },
-            Content: { children: { Free: {}, Joyful: {} } },
-            Interested: { children: { Curious: {}, Inquisitive: {} } },
-            Proud: { children: { Successful: {}, Confident: {} } },
-            Accepted: { children: { Respected: {}, Valued: {} } },
-            Powerful: { children: { Courageous: {}, Creative: {} } },
-            Peaceful: { children: { Loving: {}, Thankful: {} } },
-            Trusting: { children: { Sensitive: {}, Intimate: {} } },
-            Optimistic: { children: { Hopeful: {}, Inspired: {} } }
-        }
-    },
-    Sad: {
-        color: 'hsl(210, 29%, 40%)',
-        children: {
-            Lonely: { children: { Isolated: {}, Abandoned: {} } },
-            Vulnerable: { children: { Victimized: {}, Fragile: {} } },
-            Despair: { children: { Grief: {}, Powerless: {} } },
-            Guilty: { children: { Ashamed: {}, Remorseful: {} } },
-            Depressed: { children: { Empty: {}, Inferior: {} } }
-        }
-    },
-    Disgusted: {
-        color: 'hsl(9, 58%, 39%)',
-        children: {
-            Disapproving: { children: { Judgmental: {}, Dismissive: {} } },
-            Disappointed: { children: { Appalled: {}, Revolted: {} } },
-            Awful: { children: { Nauseated: {}, Detestable: {} } },
-            Repelled: { children: { Horrified: {}, Hesitant: {} } }
-        }
-    },
-    Angry: {
-        color: 'hsl(4, 72%, 51%)',
-        children: {
-            'Let Down': { children: { Betrayed: {}, Resentful: {} } },
-            Humiliated: { children: { Disrespected: {}, Ridiculed: {} } },
-            Bitter: { children: { Indignant: {}, Violated: {} } },
-            Mad: { children: { Furious: {}, Jealous: {} } },
-            Aggressive: { children: { Provoked: {}, Hostile: {} } },
-            Frustrated: { children: { Infuriated: {}, Annoyed: {} } },
-            Distant: { children: { Withdrawn: {}, Numb: {} } },
-            Critical: { children: { Skeptical: {}, Dismissive: {} } }
-        }
-    },
-    Fearful: {
-        color: 'hsl(328, 59%, 56%)',
-        children: {
-            Scared: { children: { Helpless: {}, Frightened: {} } },
-            Anxious: { children: { Overwhelmed: {}, Worried: {} } },
-            Insecure: { children: { Inadequate: {}, Inferior: {} } },
-            Weak: { children: { Worthless: {}, Insignificant: {} } },
-            Rejected: { children: { Excluded: {}, Persecuted: {} } },
-            Threatened: { children: { Nervous: {}, Exposed: {} } }
-        }
-    },
-    Bad: {
-        color: 'hsl(285, 27%, 37%)',
-        children: {
-            Tired: { children: { Sleepy: {}, Unfocused: {} } },
-            Stressed: { children: { 'Out of Control': {}, Overwhelmed: {} } },
-            Busy: { children: { Rushed: {}, Pressured: {} } },
-            Bored: { children: { Indifferent: {}, Apathetic: {} } }
-        }
-    },
-    Surprised: {
-        color: 'hsl(168, 76%, 42%)',
-        children: {
-            Startled: { children: { Shocked: {}, Dismayed: {} } },
-            Confused: { children: { Disillusioned: {}, Perplexed: {} } },
-            Amazed: { children: { Astonished: {}, Awe: {} } },
-            Excited: { children: { Eager: {}, Energetic: {} } }
-        }
-    }
-};
-
-const FeelingsWheel = ({ onFeelingSelect, onClose, confirmText = "Confirm Feeling" }) => {
-    const [path, setPath] = useState<string[]>([]);
-    const [currentData, setCurrentData] = useState<{ [key: string]: FeelingNode }>(feelingsWheelData);
-    const [definitionModal, setDefinitionModal] = useState<{
-        feeling: string | null;
-        isLoading: boolean;
-        definition: string;
-        error: string;
-    }>({ feeling: null, isLoading: false, definition: '', error: '' });
-
-    useEffect(() => {
-        let newData: { [key: string]: FeelingNode } | undefined = feelingsWheelData;
-        for (const key of path) {
-            newData = newData?.[key]?.children;
-        }
-        setCurrentData(newData || {});
-    }, [path]);
-
-    const handleFeelingClick = async (feeling: string) => {
-        setDefinitionModal({ feeling, isLoading: true, definition: '', error: '' });
-        try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            const systemInstruction = "You are a helpful assistant that provides concise, easy-to-understand definitions of emotions.";
-            const userPrompt = `Provide a brief, simple definition for the feeling: "${feeling}". Describe what it feels like in one or two sentences.`;
-            
-            trackEvent('fetch_feeling_definition', 'AI Features', feeling);
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: userPrompt,
-                config: { systemInstruction }
-            });
-            setDefinitionModal(prev => ({ ...prev, isLoading: false, definition: response.text }));
-        } catch (err) {
-            console.error("Error fetching definition:", err);
-            setDefinitionModal(prev => ({ ...prev, isLoading: false, error: "Could not load definition at this time." }));
-        }
+// --- Journal Page Component ---
+const JournalPage = ({ navigate }) => {
+    const moodGroups = {
+        Happy: ["Joyful", "Content", "Pleased", "Excited", "Proud", "Optimistic"],
+        Sad: ["Lonely", "Heartbroken", "Gloomy", "Disappointed", "Hopeless", "Grieving"],
+        Angry: ["Frustrated", "Annoyed", "Resentful", "Irritated", "Furious", "Jealous"],
+        Anxious: ["Worried", "Overwhelmed", "Stressed", "Nervous", "Scared", "Insecure"],
+        Surprised: ["Shocked", "Confused", "Amazed", "Startled", "Awed"],
+        Calm: ["Peaceful", "Relaxed", "Relieved", "Serene", "Tranquil", "Grateful"]
     };
 
-    const handleDrillDown = (feeling: string) => {
-        if (currentData[feeling]?.children && Object.keys(currentData[feeling].children).length > 0) {
-            setPath([...path, feeling]);
-        }
-        closeModal();
+    const moodMetadata = {
+        Happy: { color: '#27ae60', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM8.5 11.5c.83 0 1.5-.67 1.5-1.5S9.33 8.5 8.5 8.5 7 9.17 7 10s.67 1.5 1.5 1.5zm7 0c.83 0 1.5-.67 1.5-1.5s-.67-1.5-1.5-1.5-1.5.67-1.5 1.5.67 1.5 1.5 1.5zM12 17.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"/></svg> },
+        Sad: { color: '#3498db', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM8.5 11.5c.83 0 1.5-.67 1.5-1.5S9.33 8.5 8.5 8.5 7 9.17 7 10s.67 1.5 1.5 1.5zm7 0c.83 0 1.5-.67 1.5-1.5s-.67-1.5-1.5-1.5-1.5.67-1.5 1.5.67 1.5 1.5 1.5zM12 14c-2.33 0-4.31 1.46-5.11 3.5h10.22c-.8-2.04-2.78-3.5-5.11-3.5z"/></svg> },
+        Angry: { color: '#e74c3c', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM8.27 12.12c.34-.01.67.12.91.36.24.24.37.57.36.91-.01.34-.14.66-.37.9-.23.24-.56.37-.9.36-.34.01-.67-.12-.91-.36s-.37-.57-.36-.91c.01-.34.14-.66.37.9.24-.23.56-.36.9-.36zm7.46 0c.34-.01.67.12.91.36.24.24.37.57.36.91-.01.34-.14.66-.37.9-.23.24-.56.37-.9.36-.34.01-.67-.12-.91-.36s-.37-.57-.36-.91c.01-.34.14-.66.37.9.24-.23.56-.36.9-.36zM12 14c-1.68 0-3.18.8-4.1 2.01.21.05.42.08.64.08h6.92c.22 0 .43-.03.64-.08C15.18 14.8 13.68 14 12 14zm-3.5-5.04l-1.06-1.06c-.2-.2-.2-.51 0-.71s.51-.2.71 0l1.06 1.06c.2.2.2.51 0 .71-.2.2-.51.2-.71 0zm7 0l1.06-1.06c.2-.2.51-.2.71 0s.2.51 0 .71l-1.06 1.06c-.2.2-.51.2-.71 0-.2-.2-.2-.51 0-.71z"/></svg> },
+        Anxious: { color: '#f39c12', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM9.5 13.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm5 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm-5.09-4.24l-1.41-1.41c-.2-.2-.2-.51 0-.71s.51-.2.71 0l1.41 1.41c.2.2.2.51 0 .71-.2.2-.51.2-.71 0zm8.6.01l1.41-1.41c.2-.2.51-.2.71 0s.2.51 0 .71l-1.41 1.41c-.2.2-.51.2-.71 0-.2-.2-.2-.51 0-.71zM8 16h8v-1.5c0-.83-.67-1.5-1.5-1.5h-5C8.67 13 8 13.67 8 14.5V16z"/></svg> },
+        Surprised: { color: '#9b59b6', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM9.5 10c.83 0 1.5-.67 1.5-1.5S10.33 7 9.5 7 8 7.67 8 8.5 8.67 10 9.5 10zm5 0c.83 0 1.5-.67 1.5-1.5S15.33 7 14.5 7s-1.5.67-1.5 1.5.67 1.5 1.5 1.5zm-2.5 2c-1.93 0-3.5 1.57-3.5 3.5S10.07 19 12 19s3.5-1.57 3.5-3.5-1.57-3.5-3.5-3.5zm0 5c-.83 0-1.5-.67-1.5-1.5S11.17 14 12 14s1.5.67 1.5 1.5S12.83 17 12 17z"/></svg> },
+        Calm: { color: '#1abc9c', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM8 12.5h8v-1H8v1zm1.5-3C10.33 9.5 11 8.83 11 8s-.67-1.5-1.5-1.5S8 7.17 8 8s.67 1.5 1.5 1.5zm5 0c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5-1.5-.67-1.5-1.5.67-1.5 1.5 1.5z"/></svg> }
     };
 
-    const handleConfirmSelection = (feeling: string) => {
-        onFeelingSelect(feeling);
-        closeModal();
-    };
-
-    const closeModal = () => {
-        setDefinitionModal({ feeling: null, isLoading: false, definition: '', error: '' });
-    };
-
-    const handleBack = () => {
-        setPath(path.slice(0, -1));
-    };
-    
-    const items = Object.keys(currentData);
-    const sliceAngle = items.length > 0 ? 360 / items.length : 360;
-
-    // Generate colors for the current view
-    const colors = useMemo(() => {
-        const parentColor = path.length > 0 ? feelingsWheelData[path[0]]?.color : null;
-        return items.map((feeling, index) => {
-            if (path.length === 0) {
-                return feelingsWheelData[feeling]?.color || `hsl(${index * 50}, 70%, 50%)`;
-            }
-            if (!parentColor) return `hsl(${index * 50}, 70%, 50%)`;
-            
-            const [h, s, l] = parentColor.match(/\d+/g).map(Number);
-            const lightnessVariation = (items.length / 2 - index) * 5;
-            const newLightness = Math.max(25, Math.min(75, l - lightnessVariation));
-            return `hsl(${h}, ${s}%, ${newLightness}%)`;
-        });
-    }, [items, path]);
-
-    const polarToCartesian = (centerX, centerY, radius, angleInDegrees) => {
-        const angleInRadians = (angleInDegrees - 90) * Math.PI / 180.0;
-        return {
-            x: centerX + (radius * Math.cos(angleInRadians)),
-            y: centerY + (radius * Math.sin(angleInRadians))
-        };
-    };
-
-    return (
-        <div className="feelings-wheel-overlay" onClick={onClose}>
-            <div className="feelings-wheel-container" onClick={e => e.stopPropagation()}>
-                <div className="wheel-header">
-                    {path.length > 0 && <button className="wheel-nav-button" onClick={handleBack}>Back</button>}
-                    <h2 className="wheel-title">How are you feeling?</h2>
-                    <button className="wheel-nav-button close" onClick={onClose}>Close</button>
-                </div>
-
-                <div className="wheel-pie-chart">
-                    <svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
-                        {items.map((feeling, index) => {
-                            const startAngle = index * sliceAngle;
-                            const endAngle = startAngle + sliceAngle;
-                            
-                            const radius = path.length === 0 ? 50 : 45;
-                            const center = 50;
-                            
-                            const start = polarToCartesian(center, center, radius, endAngle);
-                            const end = polarToCartesian(center, center, radius, startAngle);
-                            
-                            const largeArcFlag = sliceAngle > 180 ? 1 : 0;
-                            
-                            const d = [
-                                "M", center, center,
-                                "L", start.x, start.y,
-                                "A", radius, radius, 0, largeArcFlag, 0, end.x, end.y,
-                                "Z"
-                            ].join(" ");
-
-                            // Label position
-                            const labelAngle = startAngle + sliceAngle / 2;
-                            const labelRadius = radius * 0.65;
-                            const labelPos = polarToCartesian(center, center, labelRadius, labelAngle);
-                            const words = feeling.split(' ');
-
-                            return (
-                                <g key={feeling} onClick={() => handleFeelingClick(feeling)}>
-                                    <path d={d} fill={colors[index]} className="wheel-pie-slice" />
-                                     <text
-                                        x={labelPos.x}
-                                        y={labelPos.y}
-                                        className="wheel-pie-label"
-                                        textAnchor="middle"
-                                        dominantBaseline="middle"
-                                    >
-                                        {words.map((word, i) => (
-                                          <tspan x={labelPos.x} dy={i === 0 ? 0 : '1.2em'} key={i}>{word}</tspan>
-                                        ))}
-                                    </text>
-                                </g>
-                            );
-                        })}
-                        {path.length > 0 && (
-                            <g className="wheel-center-group">
-                                <circle cx="50" cy="50" r="20" fill="var(--card-bg)" />
-                                <text x="50" y="50.5" textAnchor="middle" dominantBaseline="middle">
-                                    {path[path.length - 1]}
-                                </text>
-                            </g>
-                        )}
-                    </svg>
-                </div>
-
-                 {definitionModal.feeling && (
-                    <div className="definition-modal-overlay" onClick={closeModal}>
-                        <div className="definition-modal-content card" onClick={e => e.stopPropagation()}>
-                            <h3>{definitionModal.feeling}</h3>
-                            <div className="definition-text">
-                                {definitionModal.isLoading && <div className="spinner-small"></div>}
-                                {definitionModal.error && <p className="pin-error" style={{height: 'auto', marginBottom: 0}}>{definitionModal.error}</p>}
-                                {definitionModal.definition && <p>{definitionModal.definition}</p>}
-                            </div>
-                            <div className="definition-modal-actions">
-                                {currentData[definitionModal.feeling]?.children && Object.keys(currentData[definitionModal.feeling].children).length > 0 && (
-                                    <button className="modal-button explore" onClick={() => handleDrillDown(definitionModal.feeling)}>
-                                        Explore Further
-                                    </button>
-                                )}
-                                {confirmText !== "Done Exploring" && (
-                                    <button className="modal-button confirm" onClick={() => handleConfirmSelection(definitionModal.feeling)}>
-                                        Select This Feeling
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-};
-
-
-// --- Tracker Page Component ---
-const TrackerPage = ({ onBack }) => {
-  const [selectedFeeling, setSelectedFeeling] = useState<string | null>(null);
-  const [isWheelOpen, setIsWheelOpen] = useState(false);
-  const [selectedDay, setSelectedDay] = useState(null);
-  const [time, setTime] = useState('');
-  const [selectedSubstance, setSelectedSubstance] = useState("Select Substance");
-  const [otherSubstance, setOtherSubstance] = useState("");
-  const [location, setLocation] = useState("");
-  const [amountValue, setAmountValue] = useState("");
-  const [amountUnit, setAmountUnit] = useState("Select Substance First");
-  const [substanceHistory, setSubstanceHistory] = useState(() => {
-    try {
-        const savedHistory = localStorage.getItem('journalHistory');
-        return savedHistory ? JSON.parse(savedHistory) : [];
-    } catch (error) {
-        console.error("Could not parse journal history from localStorage", error);
-        return [];
-    }
-  });
-  const [confirmationMessage, setConfirmationMessage] = useState('');
-  
-  // States for feeling autocomplete
-  const [feelingInput, setFeelingInput] = useState<string>('');
-  const [suggestions, setSuggestions] = useState<string[]>([]);
-  
-  // States for journal reminders
-  const [reminderEnabled, setReminderEnabled] = useState(false);
-  const [reminderTime, setReminderTime] = useState('19:00');
-
-  const allFeelings: string[] = useMemo(() => {
-      const feelings = new Set<string>();
-      const recurse = (node: { [key: string]: FeelingNode }) => {
-          if (!node) return;
-          Object.keys(node).forEach(key => {
-              feelings.add(key);
-              if (node[key].children) {
-                  recurse(node[key].children);
-              }
-          });
-      };
-      recurse(feelingsWheelData);
-      return Array.from(feelings).sort();
-  }, []);
-  
-  useEffect(() => {
-    try {
-        localStorage.setItem('journalHistory', JSON.stringify(substanceHistory));
-    } catch (error) {
-        console.error("Could not save journal history to localStorage", error);
-    }
-  }, [substanceHistory]);
-
-  useEffect(() => {
-    try {
-        const savedSettings = localStorage.getItem('journalReminderSettings');
-        if (savedSettings) {
-            const { enabled, time } = JSON.parse(savedSettings);
-            setReminderEnabled(enabled);
-            setReminderTime(time);
-        }
-    } catch (e) {
-        console.error("Could not load journal reminder settings", e);
-    }
-  }, []);
-  
-  // When a feeling is selected (from wheel or suggestion), update the input text
-  useEffect(() => {
-      if (selectedFeeling) {
-          setFeelingInput(selectedFeeling);
-      }
-  }, [selectedFeeling]);
-  
-  // When substance changes, update the unit dropdown
-  useEffect(() => {
-      const units = substanceUnits[selectedSubstance];
-      if (units && units.length > 0) {
-          setAmountUnit(units[0]); // Default to the first unit
-      } else {
-          setAmountUnit('Select Substance First'); // A generic fallback
-      }
-  }, [selectedSubstance]);
-
-  const handleReminderToggle = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const isChecked = e.target.checked;
-    if (isChecked) {
-        if (Notification.permission === 'denied') {
-            alert("You've previously denied notification permissions. Please enable them in your browser settings to use this feature.");
-            return;
-        }
-        if (Notification.permission === 'default') {
-            const permission = await Notification.requestPermission();
-            if (permission !== 'granted') {
-                alert("Permission was not granted. Reminders cannot be set.");
-                return;
-            }
-        }
-    }
-    setReminderEnabled(isChecked);
-    try {
-        localStorage.setItem('journalReminderSettings', JSON.stringify({ enabled: isChecked, time: reminderTime }));
-    } catch (err) {
-        console.error("Could not save journal reminder settings", err);
-    }
-  };
-
-  const handleReminderTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const newTime = e.target.value;
-      setReminderTime(newTime);
-      if (reminderEnabled) {
-          try {
-              localStorage.setItem('journalReminderSettings', JSON.stringify({ enabled: reminderEnabled, time: newTime }));
-          } catch (err) {
-              console.error("Could not save journal reminder settings", err);
-          }
-      }
-  };
-
-  const handleFeelingSelect = (feeling: string) => {
-      setSelectedFeeling(feeling);
-      setIsWheelOpen(false);
-  };
-  
-  const handleFeelingInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const value = e.target.value;
-      setFeelingInput(value);
-
-      // If user is typing, the selection is no longer valid until they pick a new one
-      if (selectedFeeling) {
-          setSelectedFeeling(null);
-      }
-
-      if (value.length > 0) {
-          const filteredSuggestions = allFeelings.filter(
-              feeling => feeling.toLowerCase().startsWith(value.toLowerCase())
-          );
-          setSuggestions(filteredSuggestions.slice(0, 5)); // Show top 5
-      } else {
-          setSuggestions([]);
-      }
-  };
-
-  const handleSuggestionClick = (feeling: string) => {
-      setSelectedFeeling(feeling);
-      setFeelingInput(feeling);
-      setSuggestions([]);
-  };
-
-  const handleInputBlur = () => {
-      // Add a short delay so that suggestion clicks can register
-      setTimeout(() => {
-          setSuggestions([]);
-          // If the input doesn't match the selected feeling, reset it to the last valid selection or clear it
-          if (feelingInput !== selectedFeeling) {
-              setFeelingInput(selectedFeeling || '');
-          }
-      }, 150);
-  };
-  
-  const formatTime12Hour = (time24: string) => {
-      if (!time24) return '';
-      const [hours, minutes] = time24.split(':');
-      const h = parseInt(hours, 10);
-      const ampm = h >= 12 ? 'PM' : 'AM';
-      const h12 = h % 12 || 12; // Convert 0 to 12
-      return ` at ${h12}:${minutes} ${ampm}`;
-  };
-
-  const handleLogEntry = () => {
-    const substanceToLog = selectedSubstance === 'Other' ? otherSubstance : selectedSubstance;
-    
-    const today = new Date();
-    const todayIndex = today.getDay();
-    const selectedDayIndex = daysOfWeek.indexOf(selectedDay);
-    
-    let dayOffset = selectedDayIndex - todayIndex;
-    if (dayOffset > 0) {
-      dayOffset -= 7;
-    }
-    
-    const entryDate = new Date();
-    entryDate.setDate(entryDate.getDate() + dayOffset);
-
-    // Set the time correctly from the time input
-    if (time) { // time is "HH:mm"
-        const [hours, minutes] = time.split(':');
-        entryDate.setHours(parseInt(hours, 10));
-        entryDate.setMinutes(parseInt(minutes, 10));
-        entryDate.setSeconds(0);
-        entryDate.setMilliseconds(0);
-    } else {
-        // If no time is provided, use the current time of logging
-        const now = new Date();
-        entryDate.setHours(now.getHours());
-        entryDate.setMinutes(now.getMinutes());
-        entryDate.setSeconds(now.getSeconds());
-    }
-    
-    const formattedDate = entryDate.toLocaleDateString('en-AU');
-
-    const newLog = {
-      id: Date.now(),
-      entryTimestamp: entryDate.getTime(),
-      feeling: selectedFeeling,
-      day: selectedDay,
-      date: formattedDate,
-      time: time,
-      substance: substanceToLog,
-      amountValue: parseFloat(amountValue) || 0,
-      amountUnit: amountUnit,
-      location: location.trim(),
-    };
-
-    setSubstanceHistory([newLog, ...substanceHistory]);
-
-    trackEvent('log_journal_entry', 'Tracker', substanceToLog, 1);
-
-    setConfirmationMessage('Entry saved successfully!');
-    setTimeout(() => {
-      setConfirmationMessage('');
-    }, 3000);
-
-    setSelectedFeeling(null);
-    setFeelingInput('');
-    setSelectedDay(null);
-    setTime('');
-    setSelectedSubstance("Select Substance");
-    setOtherSubstance("");
-    setAmountValue("");
-    setLocation("");
-  };
-
-  const isLogEntryDisabled = 
-    !selectedFeeling || 
-    !selectedDay || 
-    selectedSubstance === "Select Substance" || 
-    !amountValue.trim() || 
-    (selectedSubstance === 'Other' && !otherSubstance.trim());
-
-  return (
-    <div className="page-container">
-       {isWheelOpen && (
-        <FeelingsWheel 
-            onFeelingSelect={handleFeelingSelect}
-            onClose={() => setIsWheelOpen(false)}
-        />
-       )}
-      <div className="content-with-side-button">
-        <div className="side-button-wrapper">
-            <button onClick={onBack} className="home-button" aria-label="Go back">
-               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-               <span>Back</span>
-            </button>
-        </div>
-        <main className="tracker-content">
-            <div className="tracker-section card">
-            <h2 className="tracker-title">Daily Journal</h2>
-            <p className="tracker-description">Log your mood and substance use to gain insight.</p>
-            
-            <div className="form-group feeling-input-container">
-                <label>How are you feeling?</label>
-                <input
-                    type="text"
-                    placeholder="Type to search for a feeling..."
-                    value={feelingInput}
-                    onChange={handleFeelingInputChange}
-                    onBlur={handleInputBlur}
-                    autoComplete="off"
-                    className={selectedFeeling ? 'selected' : ''}
-                />
-                {suggestions.length > 0 && (
-                    <ul className="feeling-suggestions-list">
-                        {suggestions.map(suggestion => (
-                            <li key={suggestion} onMouseDown={() => handleSuggestionClick(suggestion)}>
-                                {suggestion}
-                            </li>
-                        ))}
-                    </ul>
-                )}
-                <div className="feeling-wheel-prompt">
-                    <button onClick={() => setIsWheelOpen(true)} className="link-button">
-                        Click here for the Feelings Wheel
-                    </button>
-                </div>
-            </div>
-            
-            <div className="form-group">
-                <label>Day of the Week</label>
-                <div className="day-selector-container">
-                {daysOfWeek.map(day => (
-                    <button key={day} className={`day-button ${selectedDay === day ? 'selected' : ''}`} onClick={() => setSelectedDay(day)}>
-                    {day}
-                    </button>
-                ))}
-                </div>
-            </div>
-            <div className="form-group">
-                <label htmlFor="time-input">Time of Use (Optional)</label>
-                <input
-                    id="time-input"
-                    type="time"
-                    value={time}
-                    onChange={(e) => setTime(e.target.value)}
-                    style={{colorScheme: 'dark'}}
-                />
-            </div>
-            <div className="form-group">
-                <label htmlFor="substance-select">Substance</label>
-                <select
-                    id="substance-select"
-                    value={selectedSubstance}
-                    onChange={(e) => setSelectedSubstance(e.target.value)}
-                >
-                    {substanceList.map(sub => <option key={sub} value={sub}>{sub}</option>)}
-                </select>
-            </div>
-            {selectedSubstance === 'Other' && (
-                <div className="form-group">
-                    <label htmlFor="other-substance-input">Please specify</label>
-                    <input
-                        id="other-substance-input"
-                        type="text"
-                        placeholder="e.g., Prescription med"
-                        value={otherSubstance}
-                        onChange={(e) => setOtherSubstance(e.target.value)}
-                    />
-                </div>
-            )}
-            <div className="form-group">
-                <label htmlFor="location-input">Place or People (Optional)</label>
-                <input 
-                id="location-input" 
-                type="text" 
-                placeholder="e.g., At home, with friends"
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                />
-            </div>
-            <div className="form-group">
-                <label htmlFor="amount-value-input">Amount / Quantity</label>
-                <div className="amount-inputs">
-                    <input
-                        id="amount-value-input"
-                        type="number"
-                        placeholder="e.g., 1"
-                        value={amountValue}
-                        onChange={(e) => setAmountValue(e.target.value)}
-                        min="0"
-                    />
-                    <select
-                        id="amount-unit-select"
-                        value={amountUnit}
-                        onChange={(e) => setAmountUnit(e.target.value)}
-                        disabled={selectedSubstance === "Select Substance" || !substanceUnits[selectedSubstance]}
-                    >
-                        {(substanceUnits[selectedSubstance] || ['Select Substance First']).map(unit => (
-                            <option key={unit} value={unit}>{unit}</option>
-                        ))}
-                    </select>
-                </div>
-            </div>
-            <button className="log-button" onClick={handleLogEntry} disabled={isLogEntryDisabled}>
-                Log Entry
-            </button>
-            {confirmationMessage && (
-                <div className="confirmation-message">{confirmationMessage}</div>
-            )}
-
-            <div className="form-section card reminder-section" style={{marginTop: '2rem'}}>
-                <h3 className="form-section-title">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                    <span>Daily Journal Reminder</span>
-                </h3>
-                <div className="reminder-toggle">
-                    <label htmlFor="journal-reminder-enabled">Set a daily reminder to log your entry?</label>
-                    <input id="journal-reminder-enabled" type="checkbox" checked={reminderEnabled} onChange={handleReminderToggle} />
-                </div>
-                {reminderEnabled && (
-                    <div className="reminder-time-input">
-                        <label htmlFor="journal-reminder-time">Reminder time:</label>
-                        <input id="journal-reminder-time" type="time" value={reminderTime} onChange={handleReminderTimeChange} style={{colorScheme: 'dark'}} />
-                    </div>
-                )}
-            </div>
-
-            <hr className="history-divider" />
-            <div className="history-section">
-                <h3 className="history-title">History</h3>
-                {substanceHistory.length > 0 ? (
-                <ul className="history-list">
-                    {substanceHistory.map(log => {
-                        const displayAmount = log.amountValue !== undefined 
-                            ? `${log.amountValue} ${log.amountUnit || ''}` 
-                            : log.amount;
-                        return (
-                            <li key={log.id} className="history-item">
-                                <div className="history-feeling">
-                                    {log.feeling}
-                                </div>
-                                <div className="history-details">
-                                    <strong>{log.day} ({log.date}){formatTime12Hour(log.time)}: {displayAmount.trim()} of {log.substance}</strong>
-                                    {log.location && <span className="location-text">{log.location}</span>}
-                                </div>
-                            </li>
-                        )
-                    })}
-                </ul>
-                ) : (
-                <p className="no-history-message">No logs yet. Your journal will appear here.</p>
-                )}
-            </div>
-            </div>
-        </main>
-      </div>
-    </div>
-  );
-};
-
-// --- Cravings Tracker Page Component ---
-const CravingsTrackerPage = ({ onBack }) => {
-    const [intensity, setIntensity] = useState(5);
-    const [substance, setSubstance] = useState('');
-    const [trigger, setTrigger] = useState('');
-    const [copingMechanism, setCopingMechanism] = useState('');
-    const [history, setHistory] = useState(() => {
-        try {
-            const saved = localStorage.getItem('cravingsHistory');
-            return saved ? JSON.parse(saved) : [];
-        } catch (e) {
-            console.error("Could not load cravings history", e);
-            return [];
-        }
-    });
-    const [confirmationMessage, setConfirmationMessage] = useState('');
-
-    useEffect(() => {
-        try {
-            localStorage.setItem('cravingsHistory', JSON.stringify(history));
-        } catch (e) {
-            console.error("Could not save cravings history", e);
-        }
-    }, [history]);
-
-    const handleSave = () => {
-        if (substance.trim() === '' || trigger.trim() === '' || copingMechanism.trim() === '') return;
-
-        const newEntry = {
-            id: Date.now(),
-            date: new Date().toISOString(),
-            intensity,
-            substance: substance.trim(),
-            trigger: trigger.trim(),
-            copingMechanism: copingMechanism.trim(),
-        };
-
-        setHistory([newEntry, ...history]);
-        setIntensity(5);
-        setSubstance('');
-        setTrigger('');
-        setCopingMechanism('');
-        
-        trackEvent('log_craving', 'Tracker', 'Cravings Tracker');
-
-        setConfirmationMessage('Craving logged successfully!');
-        setTimeout(() => setConfirmationMessage(''), 3000);
-    };
-
-    const isSaveDisabled = substance.trim() === '' || trigger.trim() === '' || copingMechanism.trim() === '';
-
-    return (
-        <div className="page-container">
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back">
-                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                       <span>Back</span>
-                    </button>
-                </div>
-                <main className="tracker-content">
-                    <div className="page-header-text">
-                        <h1 className="app-title">Cravings Tracker</h1>
-                        <p className="app-subtitle">Log cravings to understand triggers and strengthen coping skills.</p>
-                    </div>
-                    
-                    <div className="card cravings-form-card">
-                        <div className="form-group">
-                            <label htmlFor="craving-intensity">Intensity: <span className="intensity-value">{intensity}/10</span></label>
-                            <input
-                                id="craving-intensity"
-                                type="range"
-                                min="1"
-                                max="10"
-                                value={intensity}
-                                onChange={(e) => setIntensity(parseInt(e.target.value, 10))}
-                                className="intensity-slider"
-                            />
-                        </div>
-
-                        <div className="form-group">
-                            <label htmlFor="craving-substance">What did you crave?</label>
-                            <input
-                                id="craving-substance"
-                                type="text"
-                                placeholder="e.g., Alcohol, Cannabis"
-                                value={substance}
-                                onChange={(e) => setSubstance(e.target.value)}
-                            />
-                        </div>
-
-                        <div className="form-group">
-                            <label htmlFor="craving-trigger">What was the trigger?</label>
-                            <textarea
-                                id="craving-trigger"
-                                placeholder="e.g., Felt stressed after work, saw an ad"
-                                value={trigger}
-                                onChange={(e) => setTrigger(e.target.value)}
-                                rows={3}
-                            />
-                        </div>
-                        
-                        <div className="form-group">
-                            <label htmlFor="craving-coping">What coping mechanism did you use?</label>
-                            <textarea
-                                id="craving-coping"
-                                placeholder="e.g., Went for a walk, called a friend, used the 5-4-3-2-1 method"
-                                value={copingMechanism}
-                                onChange={(e) => setCopingMechanism(e.target.value)}
-                                rows={4}
-                            />
-                        </div>
-
-                        <button className="log-button" onClick={handleSave} disabled={isSaveDisabled}>
-                            Log Craving
-                        </button>
-                        {confirmationMessage && (
-                            <div className="confirmation-message">{confirmationMessage}</div>
-                        )}
-                    </div>
-                    
-                    <hr className="history-divider" />
-                    <div className="history-section">
-                        <h3 className="history-title">Your Craving History</h3>
-                        {history.length > 0 ? (
-                            <ul className="history-list cravings-history-list">
-                                {history.map(entry => (
-                                    <li key={entry.id} className="card craving-history-item">
-                                        <div className="craving-item-header">
-                                            <h4>{entry.substance} <span className="craving-intensity-badge">Intensity: {entry.intensity}/10</span></h4>
-                                            <span className="craving-date">{new Date(entry.date).toLocaleDateString('en-AU')}</span>
-                                        </div>
-                                        <div className="craving-item-body">
-                                            <p><strong>Trigger:</strong> {entry.trigger}</p>
-                                            <p><strong>Coping:</strong> {entry.copingMechanism}</p>
-                                        </div>
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : (
-                            <p className="no-history-message">Your logged cravings will appear here.</p>
-                        )}
-                    </div>
-                </main>
-            </div>
-        </div>
-    );
-};
-
-// --- AUDIT Test Component ---
-const auditQuestions = [
-    {
-        question: "How often do you have a drink containing alcohol?",
-        options: [
-            { text: "Never", score: 0 }, { text: "Monthly or less", score: 1 }, { text: "2-4 times a month", score: 2 },
-            { text: "2-3 times a week", score: 3 }, { text: "4 or more times a week", score: 4 }
-        ]
-    },
-    {
-        question: "How many standard drinks containing alcohol do you have on a typical day when you are drinking?",
-        options: [
-            { text: "1 or 2", score: 0 }, { text: "3 or 4", score: 1 }, { text: "5 or 6", score: 2 },
-            { text: "7 to 9", score: 3 }, { text: "10 or more", score: 4 }
-        ]
-    },
-    {
-        question: "How often do you have six or more standard drinks on one occasion?",
-        options: [
-            { text: "Never", score: 0 }, { text: "Less than monthly", score: 1 }, { text: "Monthly", score: 2 },
-            { text: "Weekly", score: 3 }, { text: "Daily or almost daily", score: 4 }
-        ]
-    },
-    {
-        question: "How often during the last year have you found that you were not able to stop drinking once you had started?",
-        options: [
-            { text: "Never", score: 0 }, { text: "Less than monthly", score: 1 }, { text: "Monthly", score: 2 },
-            { text: "Weekly", score: 3 }, { text: "Daily or almost daily", score: 4 }
-        ]
-    },
-    {
-        question: "How often during the last year have you failed to do what was normally expected of you because of drinking?",
-        options: [
-            { text: "Never", score: 0 }, { text: "Less than monthly", score: 1 }, { text: "Monthly", score: 2 },
-            { text: "Weekly", score: 3 }, { text: "Daily or almost daily", score: 4 }
-        ]
-    },
-    {
-        question: "How often during the last year have you needed a first drink in the morning to get yourself going after a heavy drinking session?",
-        options: [
-            { text: "Never", score: 0 }, { text: "Less than monthly", score: 1 }, { text: "Monthly", score: 2 },
-            { text: "Weekly", score: 3 }, { text: "Daily or almost daily", score: 4 }
-        ]
-    },
-    {
-        question: "How often during the last year have you had a feeling of guilt or remorse after drinking?",
-        options: [
-            { text: "Never", score: 0 }, { text: "Less than monthly", score: 1 }, { text: "Monthly", score: 2 },
-            { text: "Weekly", score: 3 }, { text: "Daily or almost daily", score: 4 }
-        ]
-    },
-    {
-        question: "How often during the last year have you been unable to remember what happened the night before because you had been drinking?",
-        options: [
-            { text: "Never", score: 0 }, { text: "Less than monthly", score: 1 }, { text: "Monthly", score: 2 },
-            { text: "Weekly", score: 3 }, { text: "Daily or almost daily", score: 4 }
-        ]
-    },
-    {
-        question: "Have you or someone else been injured as a result of your drinking?",
-        options: [
-            { text: "No", score: 0 }, { text: "Yes, but not in the last year", score: 2 }, { text: "Yes, during the last year", score: 4 }
-        ]
-    },
-    {
-        question: "Has a relative, friend, doctor, or other health worker been concerned about your drinking or suggested you cut down?",
-        options: [
-            { text: "No", score: 0 }, { text: "Yes, but not in the last year", score: 2 }, { text: "Yes, during the last year", score: 4 }
-        ]
-    }
-];
-
-const getAuditInterpretation = (score) => {
-    if (score <= 7) return { zone: 'I', level: 'Low Risk', recommendation: 'Your responses suggest that your drinking pattern represents a low level of risk for developing alcohol-related problems.' };
-    if (score <= 15) return { zone: 'II', level: 'Increasing Risk', recommendation: 'Your drinking pattern suggests a risk of health problems. It may be beneficial to explore strategies for reducing your alcohol intake.' };
-    if (score <= 19) return { zone: 'III', level: 'Higher Risk', recommendation: 'Your drinking pattern places you at a higher risk of experiencing alcohol-related harm. Cutting down is strongly advised to reduce this risk.' };
-    return { zone: 'IV', level: 'Possible Dependence', recommendation: 'Your score indicates you are at high risk and may be experiencing alcohol dependence. It is highly recommended that you speak with a healthcare professional to discuss your drinking.' };
-};
-
-const AuditTestPage = ({ onBack }) => {
-    const [currentQ, setCurrentQ] = useState(0);
-    const [answers, setAnswers] = useState<Record<number, number>>({});
-    const [results, setResults] = useState(null);
-    const [history, setHistory] = useState([]);
-
-    useEffect(() => {
-        try {
-            const savedHistory = localStorage.getItem('auditHistory');
-            setHistory(savedHistory ? JSON.parse(savedHistory) : []);
-        } catch (e) {
-            console.error("Could not load AUDIT history", e);
-        }
+    const allSearchableMoods = useMemo(() => {
+        const headings = Object.keys(moodGroups);
+        const feelings = Object.values(moodGroups).flat();
+        return [...new Set([...headings, ...feelings])];
     }, []);
 
-    const handleAnswer = (score) => {
-        setAnswers(prev => ({ ...prev, [currentQ]: score }));
+    const substanceUnits = {
+        'Alcohol': ['Standard Drink(s)', 'Shot(s)', 'Glass(es) of Wine', 'Can(s) of Beer'],
+        'Cannabis': ['Gram(s)', 'Joint(s)', 'Edible(s)'],
+        'Cocaine': ['Line(s)', 'Gram(s)', 'Dose(s)'],
+        'MDMA (Ecstasy)': ['Pill(s)', 'Dose(s)', 'Gram(s)'],
+        'Heroin': ['Dose(s)', 'Point(s)', 'Gram(s)', 'Bag(s)'],
+        'Methamphetamine (Ice)': ['Point(s)', 'Gram(s)', 'Dose(s)'],
+        'Inhalants': ['Dose(s)', 'Can(s)'],
+        'Ketamine': ['Dose(s)', 'Gram(s)', 'Line(s)'],
+        'LSD (Acid)': ['Tab(s)', 'Dose(s)'],
+        'Other': ['Dose(s)', 'Pill(s)', 'Gram(s)']
     };
+     const substanceOrder = [
+        'Alcohol',
+        'Cannabis',
+        'Cocaine',
+        'MDMA (Ecstasy)',
+        'Heroin',
+        'Methamphetamine (Ice)',
+        'Inhalants',
+        'Ketamine',
+        'LSD (Acid)',
+        'Other'
+    ];
 
-    const handleNext = () => {
-        if (currentQ < auditQuestions.length - 1) {
-            setCurrentQ(currentQ + 1);
+    const [feeling, setFeeling] = useState('');
+    const [feelingSearch, setFeelingSearch] = useState('');
+    const [feelingSuggestions, setFeelingSuggestions] = useState<string[]>([]);
+    const [entryDateTime, setEntryDateTime] = useState(new Date());
+    const [substance, setSubstance] = useState('');
+    const [place, setPlace] = useState('');
+    const [amount, setAmount] = useState('');
+    const [unit, setUnit] = useState('');
+    const [cost, setCost] = useState('');
+    const [history, setHistory] = useState([]);
+    const [showConfirmation, setShowConfirmation] = useState(false);
+    const [showMoodSelector, setShowMoodSelector] = useState(false);
+    const [selectedMoodGroup, setSelectedMoodGroup] = useState<keyof typeof moodGroups | null>(null);
+    const [isReminderEnabled, setIsReminderEnabled] = useState(false);
+
+    useEffect(() => {
+        const storedHistory = JSON.parse(localStorage.getItem('journalHistory') || '[]');
+        setHistory(storedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+        const reminderStatus = localStorage.getItem('journalReminderEnabled') === 'true';
+        setIsReminderEnabled(reminderStatus);
+    }, []);
+    
+    const handleReminderToggle = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const isEnabled = e.target.checked;
+        
+        if (!('serviceWorker' in navigator) || !('Notification' in window) || (window.ServiceWorkerRegistration && !('periodicSync' in window.ServiceWorkerRegistration.prototype))) {
+            alert('Your browser does not support notifications or background sync, so reminders cannot be set.');
+            return;
         }
-    };
 
-    const handleBack = () => {
-        if (currentQ > 0) {
-            setCurrentQ(currentQ - 1);
-        }
-    };
+        setIsReminderEnabled(isEnabled);
+        localStorage.setItem('journalReminderEnabled', String(isEnabled));
 
-    const handleShowResults = () => {
-        const totalScore = Object.values(answers).reduce((sum, score) => sum + score, 0);
-        const interpretation = getAuditInterpretation(totalScore);
-        const resultData = { score: totalScore, interpretation, date: new Date().toISOString() };
-        setResults(resultData);
+        const registration = await navigator.serviceWorker.ready;
 
-        const newHistory = [resultData, ...history];
-        setHistory(newHistory);
-        try {
-            localStorage.setItem('auditHistory', JSON.stringify(newHistory));
-            trackEvent('complete_exercise', 'AUDIT Test', 'Score', totalScore);
-        } catch(e) {
-            console.error("Could not save AUDIT history", e);
+        if (isEnabled) {
+            const permission = await Notification.requestPermission();
+            if (permission === 'granted') {
+                try {
+                    await registration.periodicSync.register('journal-reminder', {
+                        minInterval: 24 * 60 * 60 * 1000, // 24 hours
+                    });
+                    console.log('Periodic sync registered for journal reminder.');
+                } catch (error) {
+                    console.error('Periodic sync could not be registered:', error);
+                    alert('Failed to set up the reminder.');
+                    setIsReminderEnabled(false);
+                    localStorage.setItem('journalReminderEnabled', 'false');
+                }
+            } else {
+                alert('Notification permission was denied. Reminders cannot be set.');
+                setIsReminderEnabled(false);
+                localStorage.setItem('journalReminderEnabled', 'false');
+            }
+        } else {
+            try {
+                await registration.periodicSync.unregister('journal-reminder');
+                console.log('Periodic sync unregistered for journal reminder.');
+            } catch (error) {
+                console.error('Periodic sync could not be unregistered:', error);
+            }
         }
     };
     
-    if (results) {
-        return (
-            <div className="page-container">
-                <div className="content-with-side-button">
-                    <div className="side-button-wrapper"></div>
-                    <main>
-                        <div className="page-header-text">
-                            <h1 className="app-title">Your AUDIT Result</h1>
-                        </div>
-                        <div className="audit-result-card card">
-                            <div className="audit-score-display">
-                                <span className="audit-score-value">{results.score}</span>
-                                <span className="audit-score-label">Total Score</span>
-                            </div>
-                            <h3 className={`audit-level-display zone-${results.interpretation.zone}`}>{results.interpretation.level}</h3>
-                            <p className="audit-recommendation">{results.interpretation.recommendation}</p>
-                        </div>
-
-                        <div className="disclaimer-card card">
-                            <h4>Important Disclaimer</h4>
-                            <p>The AUDIT is a screening tool to identify potential alcohol problems. It is not a diagnostic tool. This result does not constitute a medical diagnosis. Please consult with a doctor or qualified health professional to get a full assessment and discuss your results.</p>
-                        </div>
-                        
-                        {history.length > 1 && (
-                            <div className="audit-history card">
-                                <h3>Previous Results</h3>
-                                <ul>
-                                    {history.slice(1).map((item, index) => (
-                                        <li key={index}>
-                                            <span>{new Date(item.date).toLocaleDateString()}</span>
-                                            <strong>Score: {item.score} ({item.interpretation.level})</strong>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </div>
-                        )}
-
-                        <button onClick={onBack} className="exercise-nav-button" style={{marginTop: '2rem'}}>
-                            Done
-                        </button>
-                    </main>
-                </div>
-            </div>
-        );
-    }
-
-    const progress = ((currentQ + 1) / auditQuestions.length) * 100;
-    const isAnswerSelected = answers[currentQ] !== undefined;
-
-    return (
-        <div className="page-container">
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                        <span>Back</span>
-                    </button>
-                </div>
-                <main className="audit-test-container">
-                    <div className="page-header-text">
-                        <h1 className="app-title">AUDIT Questionnaire</h1>
-                        <p className="app-subtitle">Alcohol Use Disorders Identification Test</p>
-                    </div>
-                    
-                    <div className="audit-progress-bar-container">
-                        <div className="audit-progress-bar" style={{ width: `${progress}%` }}></div>
-                    </div>
-
-                    <div className="audit-question-card card">
-                        <p className="audit-question-number">Question {currentQ + 1} of {auditQuestions.length}</p>
-                        <h2 className="audit-question-text">{auditQuestions[currentQ].question}</h2>
-                        <div className="audit-answer-options">
-                            {auditQuestions[currentQ].options.map((opt) => (
-                                <button
-                                    key={opt.text}
-                                    className={`audit-answer-button ${answers[currentQ] === opt.score ? 'selected' : ''}`}
-                                    onClick={() => handleAnswer(opt.score)}
-                                >
-                                    {opt.text}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                    
-                    <div className="audit-navigation">
-                        <button onClick={handleBack} disabled={currentQ === 0} className="audit-nav-button audit-nav-secondary">Previous</button>
-                        {currentQ < auditQuestions.length - 1 ? (
-                            <button onClick={handleNext} disabled={!isAnswerSelected} className="audit-nav-button">Next</button>
-                        ) : (
-                            <button onClick={handleShowResults} disabled={!isAnswerSelected} className="audit-nav-button">See Results</button>
-                        )}
-                    </div>
-                </main>
-            </div>
-        </div>
-    );
-};
-
-// --- Three Good Things Page Component ---
-const ThreeGoodThingsPage = ({ onBack }) => {
-    const [things, setThings] = useState([
-        { what: '', why: '' },
-        { what: '', why: '' },
-        { what: '', why: '' },
-    ]);
-    const [history, setHistory] = useState(() => {
-        try {
-            const saved = localStorage.getItem('threeGoodThingsHistory');
-            return saved ? JSON.parse(saved) : [];
-        } catch (e) {
-            console.error("Could not load Three Good Things history", e);
-            return [];
+    const handleFeelingSearchChange = (e) => {
+        const value = e.target.value;
+        setFeelingSearch(value);
+        if (value) {
+            setFeelingSuggestions(allSearchableMoods.filter(f => f.toLowerCase().startsWith(value.toLowerCase())));
+        } else {
+            setFeelingSuggestions([]);
         }
-    });
-    const [confirmationMessage, setConfirmationMessage] = useState('');
-
-    useEffect(() => {
-        try {
-            localStorage.setItem('threeGoodThingsHistory', JSON.stringify(history));
-        } catch (e) {
-            console.error("Could not save Three Good Things history", e);
-        }
-    }, [history]);
-
-    const handleThingChange = (index, field, value) => {
-        const newThings = [...things];
-        newThings[index][field] = value;
-        setThings(newThings);
     };
 
-    const handleSave = () => {
-        const validThings = things.filter(t => t.what.trim() !== '');
-        if (validThings.length === 0) return;
+    const selectFeeling = (selectedFeeling) => {
+        setFeeling(selectedFeeling);
+        setFeelingSearch(selectedFeeling);
+        setFeelingSuggestions([]);
+    };
+    
+    const handleCloseMoodSelector = () => {
+        setShowMoodSelector(false);
+        setSelectedMoodGroup(null); // Reset view on close
+    };
 
+    const handleMoodSelect = (mood) => {
+        selectFeeling(mood);
+        handleCloseMoodSelector();
+    };
+
+    const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const dateStr = e.target.value; // YYYY-MM-DD
+        if (!dateStr) return;
+        const [year, month, day] = dateStr.split('-').map(Number);
+        if (!year || !month || !day) return;
+        const newDate = new Date(entryDateTime);
+        newDate.setFullYear(year, month - 1, day);
+        setEntryDateTime(newDate);
+    };
+
+    const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const timeStr = e.target.value; // HH:mm
+        if (!timeStr) return;
+        const [hours, minutes] = timeStr.split(':').map(Number);
+        if (isNaN(hours) || isNaN(minutes)) return;
+        const newDate = new Date(entryDateTime);
+        newDate.setHours(hours, minutes);
+        setEntryDateTime(newDate);
+    };
+
+    const toISODateString = (date: Date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+
+    const toISOTimeString = (date: Date) => {
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        return `${hours}:${minutes}`;
+    };
+
+    const handleLogEntry = (e) => {
+        e.preventDefault();
         const newEntry = {
-            id: Date.now(),
-            date: new Date().toISOString(),
-            things: validThings,
+            date: entryDateTime.toISOString(),
+            data: {
+                feeling,
+                substance,
+                place,
+                amount,
+                unit,
+                cost
+            }
         };
 
-        setHistory([newEntry, ...history]);
-        setThings([ { what: '', why: '' }, { what: '', why: '' }, { what: '', why: '' } ]);
+        const updatedHistory = [newEntry, ...history].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        localStorage.setItem('journalHistory', JSON.stringify(updatedHistory));
+        setHistory(updatedHistory);
         
-        trackEvent('complete_exercise', 'Positive Psychology', 'Three Good Things');
+        // Reset form
+        setFeeling('');
+        setFeelingSearch('');
+        setSubstance('');
+        setPlace('');
+        setAmount('');
+        setUnit('');
+        setCost('');
+        setEntryDateTime(new Date());
 
-        setConfirmationMessage('Entry saved successfully!');
-        setTimeout(() => setConfirmationMessage(''), 3000);
+        // Show confirmation
+        setShowConfirmation(true);
+        setTimeout(() => setShowConfirmation(false), 3000);
+        window.dispatchEvent(new Event('app:action'));
     };
 
-    const isSaveDisabled = things.every(t => t.what.trim() === '');
-    const today = new Date().toLocaleDateString('en-AU');
-    const hasLoggedToday = history.some(entry => new Date(entry.date).toLocaleDateString('en-AU') === today);
+    const isLogButtonDisabled = !feeling || !substance || !amount || !unit;
 
     return (
-        <div className="page-container">
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back">
-                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                       <span>Back</span>
-                    </button>
-                </div>
-                <main className="tracker-content">
-                    <div className="page-header-text">
-                        <h1 className="app-title">Three Good Things</h1>
-                        <p className="app-subtitle">Reflect on three things that went well today and why.</p>
-                    </div>
-                    
-                    <div className="card" style={{ gap: '2rem', padding: '2.5rem' }}>
-                        {things.map((thing, index) => (
-                            <div className="form-group" key={index}>
-                                <label htmlFor={`good-thing-${index}`} style={{ fontSize: '1.1rem' }}>Good Thing #{index + 1}</label>
-                                <input
-                                    id={`good-thing-${index}`}
-                                    type="text"
-                                    placeholder="What went well?"
-                                    value={thing.what}
-                                    onChange={(e) => handleThingChange(index, 'what', e.target.value)}
-                                />
-                                <textarea
-                                    placeholder="Why was this a good thing for you? (Optional)"
-                                    value={thing.why}
-                                    onChange={(e) => handleThingChange(index, 'why', e.target.value)}
-                                    rows={3}
-                                />
-                            </div>
-                        ))}
-                        
-                        {hasLoggedToday && !isSaveDisabled && (
-                           <p style={{ color: 'var(--text-muted)', textAlign: 'center', marginTop: '-1rem' }}>
-                               You've already logged for today! Feel free to add more positive moments.
-                           </p>
-                        )}
+        <div className="page-container" style={{paddingTop: '1rem'}}>
+            <header className="page-header-text" style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                 <h1 className="app-title">Daily Journal</h1>
+            </header>
 
-                        <button className="log-button" onClick={handleSave} disabled={isSaveDisabled}>
-                            Save Today's Entry
-                        </button>
-                        {confirmationMessage && (
-                            <div className="confirmation-message">{confirmationMessage}</div>
-                        )}
-                    </div>
-                    
-                    <hr className="history-divider" />
-                    <div className="history-section">
-                        <h3 className="history-title">Your Reflections</h3>
-                        {history.length > 0 ? (
-                            <ul className="history-list" style={{ gap: '1.5rem' }}>
-                                {history.map(entry => (
-                                    <li key={entry.id} className="card" style={{ padding: '1.5rem', alignItems: 'flex-start', textAlign: 'left', gap: '1rem', cursor: 'default' }}>
-                                        <h4 style={{ color: 'var(--accent-teal)', width: '100%', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
-                                            {new Date(entry.date).toLocaleDateString('en-AU', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                                        </h4>
-                                        {entry.things.map((t, i) => (
-                                            <div key={i} style={{ width: '100%' }}>
-                                                <p style={{ fontWeight: '700', color: 'var(--text-light)' }}>{i + 1}. {t.what}</p>
-                                                {t.why && <p style={{ fontStyle: 'italic', color: 'var(--text-muted)', paddingLeft: '1.5rem', marginTop: '0.25rem' }}>- {t.why}</p>}
-                                            </div>
-                                        ))}
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : (
-                            <p className="no-history-message">Your past reflections will appear here.</p>
-                        )}
-                    </div>
-                </main>
-            </div>
-        </div>
-    );
-};
+            <main>
+                <form onSubmit={handleLogEntry} className="card tracker-section">
+                    <p className="tracker-description">Log your mood and substance use to gain insight.</p>
 
-// --- Wind-Down Toolkit Page Component ---
-const windDownActivities = [
-    {
-        category: 'Relax Your Body',
-        items: [
-            { id: 'wd-stretch', title: 'Gentle Stretching', description: 'Release muscle tension and improve circulation before bed.', icon: '🧘' },
-            { id: 'wd-bath', title: 'Warm Bath or Shower', description: 'Helps lower your core body temperature, signaling your body it\'s time for sleep.', icon: '🛀' },
-            { id: 'wd-tea', title: 'Sip Herbal Tea', description: 'Drink a calming, caffeine-free tea like chamomile or lavender.', icon: '🍵' },
-            { id: 'wd-self-massage', title: 'Self-Massage', description: 'Use a foam roller or your hands to massage sore muscles.', icon: '💆' },
-        ]
-    },
-    {
-        category: 'Calm Your Mind',
-        items: [
-            { id: 'wd-read', title: 'Read a Book', description: 'Choose a physical book over a screen to reduce blue light exposure.', icon: '📚' },
-            { id: 'wd-journal', title: 'Journal', description: 'Write down worries or thoughts to clear your mind before sleeping.', icon: '✏️' },
-            { id: 'wd-meditate', title: 'Meditate', description: 'Practice mindfulness or guided meditation to reduce stress.', icon: '🧠' },
-            { id: 'wd-music', title: 'Listen to Calm Music', description: 'Choose relaxing ambient sounds, classical music, or a sleep podcast.', icon: '🎶' },
-        ]
-    },
-    {
-        category: 'Prepare Your Environment',
-        items: [
-            { id: 'wd-dim-lights', title: 'Dim the Lights', description: 'Lower light levels an hour before bed to boost melatonin production.', icon: '💡' },
-            { id: 'wd-tidy', title: 'Tidy Your Space', description: 'A clean, organized room can promote a sense of calm.', icon: '🧹' },
-            { id: 'wd-set-alarm', title: 'Set Alarm for Tomorrow', description: 'Avoid last-minute phone use by setting your alarm early.', icon: '⏰' },
-            { id: 'wd-cool-room', title: 'Cool Down Your Room', description: 'A cooler room temperature (around 18°C / 65°F) is ideal for sleep.', icon: '❄️' },
-        ]
-    }
-];
-
-const WindDownToolkitPage = ({ onBack }) => {
-    const [myRoutine, setMyRoutine] = useState(() => {
-        try {
-            const saved = localStorage.getItem('windDownRoutine');
-            return saved ? JSON.parse(saved) : [];
-        } catch (e) { 
-            console.error("Could not load wind-down routine", e);
-            return []; 
-        }
-    });
-
-    useEffect(() => {
-        try {
-            localStorage.setItem('windDownRoutine', JSON.stringify(myRoutine));
-        } catch (e) { console.error("Could not save wind-down routine", e); }
-    }, [myRoutine]);
-
-    const handleToggleActivity = (activity) => {
-        setMyRoutine(prev => {
-            const isInRoutine = prev.some(item => item.id === activity.id);
-            if (isInRoutine) {
-                return prev.filter(item => item.id !== activity.id);
-            } else {
-                return [...prev, activity];
-            }
-        });
-        trackEvent('customize_routine', 'Wind-Down Toolkit', activity.title);
-    };
-
-    const isInMyRoutine = (activityId) => myRoutine.some(item => item.id === activityId);
-
-    // Placeholder for future functionality
-    const handleStartRoutine = () => {
-        alert("Starting your wind-down routine!");
-        trackEvent('start_routine', 'Wind-Down Toolkit');
-    };
-
-    return (
-        <div className="page-container">
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back">
-                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                       <span>Back</span>
-                    </button>
-                </div>
-                <main className="tracker-content">
-                    <div className="page-header-text">
-                        <h1 className="app-title">Design Your Wind-Down</h1>
-                        <p className="app-subtitle">Build a personalized routine to prepare your mind and body for sleep.</p>
-                    </div>
-
-                    {myRoutine.length > 0 && (
-                        <div className="card wind-down-my-routine">
-                            <h3 className="wind-down-section-title">Your Routine</h3>
-                            <div className="wind-down-routine-chips">
-                                {myRoutine.map(activity => (
-                                    <span key={activity.id} className="wind-down-chip">
-                                        {activity.icon} {activity.title}
-                                    </span>
-                                ))}
-                            </div>
-                            <button className="log-button" onClick={handleStartRoutine}>Start Wind-Down</button>
+                    <div className="form-group">
+                        <label>How are you feeling?</label>
+                        <div className="feeling-input-container">
+                            <input
+                                type="text"
+                                value={feelingSearch}
+                                onChange={handleFeelingSearchChange}
+                                onBlur={() => setTimeout(() => setFeelingSuggestions([]), 150)}
+                                onFocus={handleFeelingSearchChange}
+                                placeholder="Type to search for a feeling..."
+                                required
+                            />
+                            {feelingSuggestions.length > 0 && (
+                                <ul className="feeling-suggestions-list">
+                                    {feelingSuggestions.map(f => <li key={f} onMouseDown={() => selectFeeling(f)}>{f}</li>)}
+                                </ul>
+                            )}
                         </div>
-                    )}
+                        <div className="feeling-wheel-prompt">
+                           <button type="button" className="link-button" onClick={() => setShowMoodSelector(true)}>Click here to select your mood</button>
+                        </div>
+                    </div>
                     
-                    <div className="wind-down-toolkit">
-                        <h3 className="wind-down-section-title">Activity Toolkit</h3>
-                        {windDownActivities.map(category => (
-                            <div key={category.category} className="wind-down-category">
-                                <h4>{category.category}</h4>
-                                <div className="wind-down-activity-grid">
-                                    {category.items.map(activity => (
-                                        <button 
-                                            key={activity.id} 
-                                            className={`card wind-down-activity-card ${isInMyRoutine(activity.id) ? 'selected' : ''}`}
-                                            onClick={() => handleToggleActivity(activity)}
-                                        >
-                                            <span className="wind-down-activity-icon">{activity.icon}</span>
-                                            <div className="wind-down-activity-text">
-                                                <p className="wind-down-activity-title">{activity.title}</p>
-                                                <p className="wind-down-activity-desc">{activity.description}</p>
-                                            </div>
-                                            <div className="wind-down-activity-selector">
-                                                {isInMyRoutine(activity.id) ? '✓' : '+'}
-                                            </div>
+                    <div className="form-group">
+                        <label>Date & Time of Use</label>
+                        <div className="date-time-inputs">
+                            <input
+                                type="date"
+                                value={toISODateString(entryDateTime)}
+                                onChange={handleDateChange}
+                                required
+                            />
+                            <input
+                                type="time"
+                                value={toISOTimeString(entryDateTime)}
+                                onChange={handleTimeChange}
+                                required
+                            />
+                        </div>
+                    </div>
+
+                    <div className="form-group">
+                        <label>Substance</label>
+                        <select value={substance} onChange={(e) => { setSubstance(e.target.value); setUnit(''); }} required>
+                            <option value="" disabled>Select Substance</option>
+                            {substanceOrder.map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                    </div>
+
+                    <div className="form-group">
+                        <label>Place or People (Optional)</label>
+                        <input type="text" value={place} onChange={(e) => setPlace(e.target.value)} placeholder="e.g., At home, with friends" />
+                    </div>
+
+                    <div className="form-group">
+                        <label>Amount / Quantity</label>
+                        <div className="amount-inputs">
+                            <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="e.g., 1" required />
+                            <select value={unit} onChange={(e) => setUnit(e.target.value)} disabled={!substance} required>
+                                <option value="" disabled>{substance ? 'Select Unit' : 'Select Substance First'}</option>
+                                {substance && substanceUnits[substance as keyof typeof substanceUnits] && substanceUnits[substance as keyof typeof substanceUnits].map(u => <option key={u} value={u}>{u}</option>)}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div className="form-group">
+                        <label>Cost (Optional)</label>
+                        <div className="cost-input-container">
+                            <span>$</span>
+                            <input
+                                type="number"
+                                value={cost}
+                                onChange={(e) => setCost(e.target.value)}
+                                placeholder="e.g., 20.50"
+                                step="0.01"
+                                min="0"
+                            />
+                        </div>
+                    </div>
+
+                    <button type="submit" className="log-button" disabled={isLogButtonDisabled} style={{marginTop: '1rem'}}>Log Entry</button>
+                    {showConfirmation && <p className="confirmation-message">Entry Logged Successfully!</p>}
+                </form>
+                
+                <div className="card reminder-section no-hover">
+                    <div className="form-section-title">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
+                        <h3>Daily Journal Reminder</h3>
+                    </div>
+                    <div className="reminder-toggle">
+                        <span>Set a daily reminder to log your entry?</span>
+                        <label className="toggle-switch">
+                            <input
+                                type="checkbox"
+                                checked={isReminderEnabled}
+                                onChange={handleReminderToggle}
+                            />
+                            <span className="toggle-label"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <section className="history-section">
+                    <hr className="history-divider" />
+                    <h3 className="history-title">History</h3>
+                    {history.length > 0 ? (
+                        <ul className="history-list">
+                            {history.slice(0, 5).map(entry => {
+                                const entryDate = new Date(entry.date);
+                                const formattedDate = entryDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'long' }); // e.g., "24 July"
+                                const formattedTime = entryDate.toLocaleTimeString('en-US', { timeStyle: 'short' }); // e.g., "3:30 PM"
+
+                                return (
+                                    <li key={entry.date} className="history-item">
+                                        <div className="history-feeling">{entry.data.feeling}</div>
+                                        <div className="history-details">
+                                            <span><strong>{entry.data.substance}</strong> - {entry.data.amount} {entry.data.unit}</span>
+                                            <span>{formattedDate} at {formattedTime}</span>
+                                            {entry.data.place && <span className="location-text">Place/People: {entry.data.place}</span>}
+                                        </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    ) : (
+                        <p className="no-history-message">No entries yet. Your history will appear here.</p>
+                    )}
+                </section>
+            </main>
+            {showMoodSelector && (
+                 <div className="mood-selector-overlay" onClick={handleCloseMoodSelector}>
+                    <div className="card mood-selector-content" onClick={(e) => e.stopPropagation()}>
+                        {selectedMoodGroup ? (
+                            <div className="mood-details-view">
+                                <header className="mood-details-header">
+                                     <button onClick={() => setSelectedMoodGroup(null)} className="back-button" aria-label="Back to mood groups">
+                                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                                    </button>
+                                    <button className="mood-header-selectable" onClick={() => handleMoodSelect(selectedMoodGroup)}>
+                                        <div className="mood-card-icon" style={{ '--mood-color': moodMetadata[selectedMoodGroup].color } as React.CSSProperties}>
+                                            {moodMetadata[selectedMoodGroup].icon}
+                                        </div>
+                                        <h3>{selectedMoodGroup}</h3>
+                                    </button>
+                                </header>
+                                <div className="mood-chip-container">
+                                    {moodGroups[selectedMoodGroup].map(mood => (
+                                        <button key={mood} className="mood-chip" onClick={() => handleMoodSelect(mood)}>
+                                            {mood}
                                         </button>
                                     ))}
                                 </div>
                             </div>
-                        ))}
+                        ) : (
+                            <>
+                                <h2 className="app-title">How are you feeling?</h2>
+                                <p>Select a general mood group to see more specific feelings.</p>
+                                <div className="mood-grid">
+                                    {Object.keys(moodGroups).map((group) => (
+                                        <button key={group} className="mood-category-card" style={{ '--mood-color': moodMetadata[group as keyof typeof moodMetadata].color } as React.CSSProperties} onClick={() => setSelectedMoodGroup(group as keyof typeof moodGroups)}>
+                                            <div className="mood-card-icon">{moodMetadata[group as keyof typeof moodMetadata].icon}</div>
+                                            <h4 className="mood-card-title">{group}</h4>
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
                     </div>
-                </main>
-            </div>
+                </div>
+            )}
         </div>
     );
 };
 
-// --- Thought Triangle Page Component ---
-const ThoughtTrianglePage = ({ onBack }) => {
-    const [entry, setEntry] = useState({
-        situation: '',
-        thoughts: '',
-        feelings: '',
-        behaviors: '',
-    });
-    const [history, setHistory] = useState(() => {
-        try {
-            const saved = localStorage.getItem('thoughtTriangleHistory');
-            return saved ? JSON.parse(saved) : [];
-        } catch (e) {
-            console.error("Could not load Thought Triangle history", e);
-            return [];
+// --- HomePage Component ---
+const HomePage = ({ userProfile, pinnedTools, togglePin, lastUseDate, navigate }) => {
+    return (
+        <div className="page-container">
+            <header className="app-header">
+                <div className="header-content">
+                    <h1 className="welcome-message">Hello, {userProfile.username}</h1>
+                    <p className="app-subtitle">Welcome back to your journey.</p>
+                </div>
+            </header>
+            <main>
+                <section>
+                     <SoberClock lastUseDate={lastUseDate} />
+                </section>
+                <section>
+                    <h2 className="section-title">My Pinned Tools</h2>
+                    {pinnedTools.length > 0 ? (
+                        <div className="card-grid home-grid">
+                            {ALL_TOOLS.filter(tool => pinnedTools.includes(tool.id)).map(tool => (
+                                <ToolCard key={tool.id} tool={tool} navigate={navigate} isPinned={true} togglePin={togglePin} />
+                            ))}
+                        </div>
+                    ) : (
+                        <div className="card no-hover empty-home-prompt">
+                           <p>Your dashboard is empty. Go to the <strong>Tools</strong> tab to pin your favorite features for quick access here!</p>
+                        </div>
+                    )}
+                </section>
+            </main>
+        </div>
+    );
+};
+
+// --- ToolCard Component (reusable) ---
+const ToolCard = ({ tool, navigate, isPinned, togglePin }) => {
+    const handleClick = () => {
+        if (tool.external) {
+            window.open(tool.navigate, '_blank');
+            if (tool.id === 'know-your-drugs') {
+                 localStorage.setItem('eventHistory', JSON.stringify([...JSON.parse(localStorage.getItem('eventHistory') || '[]'), 'know_your_drugs']));
+                 window.dispatchEvent(new Event('app:action'));
+            }
+        } else {
+            navigate(tool.navigate);
         }
-    });
-    const [confirmationMessage, setConfirmationMessage] = useState('');
+    };
+
+    return (
+        <div className="card" onClick={handleClick}>
+             <button
+                className={`card-pin-button ${isPinned ? 'pinned' : ''}`}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    togglePin(tool.id);
+                }}
+                aria-label={isPinned ? `Unpin ${tool.title}` : `Pin ${tool.title}`}
+            >
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1.03 1.03.01.01c.38.38 1.02.38 1.41 0l.01-.01L13 21v-7h6v-2c-1.66 0-3-1.34-3-3z"/>
+                </svg>
+            </button>
+            {tool.icon}
+            <h3 className="card-title">{tool.title}</h3>
+            <p className="card-subtitle">{tool.subtitle}</p>
+        </div>
+    );
+};
+
+// --- ToolsPage Component ---
+const ToolsPage = ({ navigate, pinnedTools, togglePin }) => {
+    const categories = ALL_TOOLS.reduce((acc, tool) => {
+        (acc[tool.category] = acc[tool.category] || []).push(tool);
+        return acc;
+    }, {});
+
+    const categoryOrder = ['Trackers', 'Exercises', 'Growth'];
+
+    return (
+        <div className="page-container">
+            <header className="page-header-text">
+                <h1 className="app-title">Tools</h1>
+                <p className="app-subtitle">Explore all available resources.</p>
+            </header>
+            <main>
+                {categoryOrder.map(category => (
+                    <section key={category}>
+                        <h2 className="section-title">{category}</h2>
+                        <div className="card-grid home-grid">
+                            {categories[category].map(tool => (
+                                <ToolCard
+                                    key={tool.id}
+                                    tool={tool}
+                                    navigate={navigate}
+                                    isPinned={pinnedTools.includes(tool.id)}
+                                    togglePin={togglePin}
+                                />
+                            ))}
+                        </div>
+                    </section>
+                ))}
+            </main>
+        </div>
+    );
+};
+
+
+// --- SoberClock Component ---
+const SoberClock = ({ lastUseDate }) => {
+    const calculateTimeSober = useCallback(() => {
+        if (!lastUseDate) return null;
+        const diff = new Date().getTime() - new Date(lastUseDate).getTime();
+        if (diff < 0) return { days: 0, hours: 0, minutes: 0, seconds: 0 };
+
+        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+        const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
+        const minutes = Math.floor((diff / 1000 / 60) % 60);
+        const seconds = Math.floor((diff / 1000) % 60);
+        return { days, hours, minutes, seconds };
+    }, [lastUseDate]);
+
+    const [timeSober, setTimeSober] = useState(calculateTimeSober());
 
     useEffect(() => {
-        try {
-            localStorage.setItem('thoughtTriangleHistory', JSON.stringify(history));
-        } catch (e) {
-            console.error("Could not save Thought Triangle history", e);
-        }
-    }, [history]);
+        if (!lastUseDate) return;
+        const timer = setInterval(() => {
+            setTimeSober(calculateTimeSober());
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [lastUseDate, calculateTimeSober]);
 
-    const handleChange = (field, value) => {
-        setEntry(prev => ({ ...prev, [field]: value }));
+    return (
+        <div className="card no-hover sober-clock-card">
+            <h3 className="section-title" style={{ marginTop: 0, textAlign: 'center' }}>Time Sober</h3>
+            {timeSober ? (
+                <div className="sober-clock-container">
+                    <div className="time-segment">
+                        <span className="time-value">{timeSober.days}</span>
+                        <span className="time-label">Days</span>
+                    </div>
+                    <div className="time-segment">
+                        <span className="time-value">{String(timeSober.hours).padStart(2, '0')}</span>
+                        <span className="time-label">Hours</span>
+                    </div>
+                    <div className="time-segment">
+                        <span className="time-value">{String(timeSober.minutes).padStart(2, '0')}</span>
+                        <span className="time-label">Mins</span>
+                    </div>
+                    <div className="time-segment">
+                        <span className="time-value">{String(timeSober.seconds).padStart(2, '0')}</span>
+                        <span className="time-label">Secs</span>
+                    </div>
+                </div>
+            ) : (
+                <div className="sober-clock-prompt">
+                    <p>Log your last use in the Daily Journal to start the clock and track your progress!</p>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// --- Profile Page Component ---
+const ProfilePage = ({ navigate }) => {
+    const [profile, setProfile] = useState({
+        username: '',
+        gender: '',
+        dob: '',
+        emergencyContactName: '',
+        emergencyContactPhone: '',
+        emergencyContactEmail: ''
+    });
+    const [showConfirmation, setShowConfirmation] = useState(false);
+
+    useEffect(() => {
+        const storedProfile = JSON.parse(localStorage.getItem('userProfile') || '{}');
+        setProfile(p => ({ ...p, ...storedProfile }));
+    }, []);
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+        const { name, value } = e.target;
+        setProfile(prev => ({ ...prev, [name]: value }));
     };
 
-    const handleSave = () => {
-        if (entry.situation.trim() === '') return;
+    const handleSave = (e: React.FormEvent) => {
+        e.preventDefault();
+        localStorage.setItem('userProfile', JSON.stringify(profile));
+        setShowConfirmation(true);
+        setTimeout(() => setShowConfirmation(false), 3000);
+        window.dispatchEvent(new Event('app:action'));
+        window.dispatchEvent(new CustomEvent('app:profile_updated', { detail: profile }));
+    };
 
+    return (
+        <div className="page-container" style={{ paddingTop: '1rem' }}>
+            <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <button onClick={() => navigate('home')} className="back-button" aria-label="Go Back to Home">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" /></svg>
+                </button>
+                <h1 className="app-title">My Profile</h1>
+            </header>
+            <main>
+                <form onSubmit={handleSave} className="card profile-form">
+                    <p className="tracker-description">This information is stored only on your device and is never shared.</p>
+                    
+                    <div className="form-group">
+                        <label htmlFor="username">Name / Nickname</label>
+                        <input
+                            id="username"
+                            name="username"
+                            type="text"
+                            value={profile.username}
+                            onChange={handleChange}
+                            placeholder="How should we call you?"
+                            required
+                        />
+                    </div>
+                    
+                    <div className="form-group">
+                        <label htmlFor="dob">Date of Birth</label>
+                        <input
+                            id="dob"
+                            name="dob"
+                            type="date"
+                            value={profile.dob}
+                            onChange={handleChange}
+                        />
+                    </div>
+                    
+                    <div className="form-group">
+                        <label htmlFor="gender">Gender</label>
+                        <select id="gender" name="gender" value={profile.gender} onChange={handleChange}>
+                            <option value="">Select...</option>
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                            <option value="Non-binary">Non-binary</option>
+                            <option value="Other">Other</option>
+                            <option value="Prefer not to say">Prefer not to say</option>
+                        </select>
+                    </div>
+
+                    <h3 className="profile-section-title">Emergency Contact</h3>
+                    <p className="tracker-description" style={{textAlign: 'left', marginTop: '-1rem'}}>This person can be contacted in case of an emergency. You can also share your Safety Plan with them.</p>
+
+                    <div className="form-group">
+                        <label htmlFor="emergencyContactName">Contact Name</label>
+                        <input
+                            id="emergencyContactName"
+                            name="emergencyContactName"
+                            type="text"
+                            value={profile.emergencyContactName}
+                            onChange={handleChange}
+                            placeholder="e.g., Jane Doe"
+                        />
+                    </div>
+
+                    <div className="form-group">
+                        <label htmlFor="emergencyContactPhone">Contact Phone</label>
+                        <input
+                            id="emergencyContactPhone"
+                            name="emergencyContactPhone"
+                            type="tel"
+                            value={profile.emergencyContactPhone}
+                            onChange={handleChange}
+                            placeholder="e.g., (555) 123-4567"
+                        />
+                    </div>
+                    
+                     <div className="form-group">
+                        <label htmlFor="emergencyContactEmail">Contact Email</label>
+                        <input
+                            id="emergencyContactEmail"
+                            name="emergencyContactEmail"
+                            type="email"
+                            value={profile.emergencyContactEmail}
+                            onChange={handleChange}
+                            placeholder="e.g., jane.doe@example.com"
+                        />
+                    </div>
+
+                    <button type="submit" className="log-button" style={{ marginTop: '1rem' }}>Save Profile</button>
+                    {showConfirmation && <p className="confirmation-message">Profile saved successfully!</p>}
+                </form>
+            </main>
+        </div>
+    );
+};
+
+// --- Privacy Policy Page Component ---
+const PrivacyPage = ({ navigate }) => {
+    return (
+        <div className="page-container" style={{ paddingTop: '1rem' }}>
+            <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <button onClick={() => navigate('home')} className="back-button" aria-label="Go Back to Home">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" /></svg>
+                </button>
+                <h1 className="app-title">Privacy Policy</h1>
+            </header>
+            <main>
+                <div className="card no-hover" style={{ textAlign: 'left', alignItems: 'flex-start' }}>
+                    <p style={{ lineHeight: 1.7, color: 'var(--text-muted)' }}>
+                        <strong>Your Journey, Your Tools</strong> is a privacy-focused application. All the data you enter, including your PIN, journal entries, goals, and personal information, is stored <strong>exclusively on your device</strong>.
+                        <br /><br />
+                        We do not have a server, and we do not collect, view, or share any of your personal data. This means your information remains private to you.
+                        <br /><br />
+                        The only exception is the optional, anonymous usage data we collect via Google Analytics to help us understand which features are most used and improve the app.
+                    </p>
+                </div>
+            </main>
+        </div>
+    );
+};
+
+
+// --- Gratitude Log Page Component ---
+const GratitudeLogPage = ({ navigate }) => {
+    const [items, setItems] = useState(['', '', '']);
+    const [history, setHistory] = useState<GratitudeEntry[]>([]);
+    const [showConfirmation, setShowConfirmation] = useState(false);
+
+    useEffect(() => {
+        const storedHistory = JSON.parse(localStorage.getItem('gratitudeHistory') || '[]') as GratitudeEntry[];
+        setHistory(storedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+    }, []);
+
+    const handleItemChange = (index: number, value: string) => {
+        const newItems = [...items];
+        newItems[index] = value;
+        setItems(newItems);
+    };
+
+    const handleLogEntry = (e: React.FormEvent) => {
+        e.preventDefault();
         const newEntry = {
-            id: Date.now(),
             date: new Date().toISOString(),
-            ...entry
+            items: items.filter(item => item.trim() !== '')
         };
 
-        setHistory([newEntry, ...history]);
-        setEntry({ situation: '', thoughts: '', feelings: '', behaviors: '' });
-        
-        trackEvent('complete_exercise', 'CBT', 'Thought Triangle');
+        if (newEntry.items.length < 3) return; // Ensure all three are filled
 
-        setConfirmationMessage('Entry saved successfully!');
-        setTimeout(() => setConfirmationMessage(''), 3000);
+        const updatedHistory = [newEntry, ...history].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        localStorage.setItem('gratitudeHistory', JSON.stringify(updatedHistory));
+        setHistory(updatedHistory);
+
+        setItems(['', '', '']);
+        setShowConfirmation(true);
+        setTimeout(() => setShowConfirmation(false), 3000);
+        window.dispatchEvent(new Event('app:action'));
     };
-
-    const isSaveDisabled = entry.situation.trim() === '';
+    
+    const isLogButtonDisabled = items.some(item => item.trim() === '');
 
     return (
-        <div className="page-container">
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back">
-                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                       <span>Back</span>
-                    </button>
-                </div>
-                <main className="tracker-content">
-                    <div className="page-header-text">
-                        <h1 className="app-title">The Thought Triangle</h1>
-                        <p className="app-subtitle">Explore the connection between your thoughts, feelings, and behaviors.</p>
-                    </div>
-                    
-                    <div className="card" style={{ gap: '2rem', padding: '2.5rem' }}>
-                        <div className="form-group">
-                            <label htmlFor="triangle-situation" style={{ fontSize: '1.1rem' }}>The Situation</label>
-                            <textarea
-                                id="triangle-situation"
-                                placeholder="What happened?"
-                                value={entry.situation}
-                                onChange={(e) => handleChange('situation', e.target.value)}
-                                rows={3}
-                            />
-                        </div>
-                        <div className="form-group">
-                            <label htmlFor="triangle-thoughts" style={{ fontSize: '1.1rem' }}>Your Thoughts</label>
-                            <textarea
-                                id="triangle-thoughts"
-                                placeholder="What went through your mind?"
-                                value={entry.thoughts}
-                                onChange={(e) => handleChange('thoughts', e.target.value)}
-                                rows={4}
-                            />
-                        </div>
-                        <div className="form-group">
-                            <label htmlFor="triangle-feelings" style={{ fontSize: '1.1rem' }}>Your Feelings</label>
-                            <textarea
-                                id="triangle-feelings"
-                                placeholder="How did that make you feel?"
-                                value={entry.feelings}
-                                onChange={(e) => handleChange('feelings', e.target.value)}
-                                rows={3}
-                            />
-                        </div>
-                        <div className="form-group">
-                            <label htmlFor="triangle-behaviors" style={{ fontSize: '1.1rem' }}>Your Behaviors</label>
-                            <textarea
-                                id="triangle-behaviors"
-                                placeholder="What did you do?"
-                                value={entry.behaviors}
-                                onChange={(e) => handleChange('behaviors', e.target.value)}
-                                rows={3}
-                            />
-                        </div>
-
-                        <button className="log-button" onClick={handleSave} disabled={isSaveDisabled}>
-                            Save Entry
-                        </button>
-                        {confirmationMessage && (
-                            <div className="confirmation-message">{confirmationMessage}</div>
-                        )}
-                    </div>
-                    
-                    <hr className="history-divider" />
-                    <div className="history-section">
-                        <h3 className="history-title">Your Triangle History</h3>
-                        {history.length > 0 ? (
-                            <ul className="history-list" style={{ gap: '1.5rem' }}>
-                                {history.map(item => (
-                                    <li key={item.id} className="card" style={{ padding: '1.5rem', alignItems: 'flex-start', textAlign: 'left', gap: '1rem', cursor: 'default' }}>
-                                        <h4 style={{ color: 'var(--accent-teal)', width: '100%', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.75rem' }}>
-                                            {new Date(item.date).toLocaleDateString('en-AU', { weekday: 'long', month: 'long', day: 'numeric' })}
-                                        </h4>
-                                        <div style={{ width: '100%' }}>
-                                            <p style={{ fontWeight: '700', color: 'var(--text-light)', marginBottom: '0.25rem' }}>Situation:</p>
-                                            <p style={{ color: 'var(--text-muted)', paddingLeft: '1rem', whiteSpace: 'pre-wrap' }}>{item.situation}</p>
-                                        </div>
-                                        <div style={{ width: '100%' }}>
-                                            <p style={{ fontWeight: '700', color: 'var(--text-light)', marginBottom: '0.25rem' }}>Thoughts:</p>
-                                            <p style={{ color: 'var(--text-muted)', paddingLeft: '1rem', whiteSpace: 'pre-wrap' }}>{item.thoughts || 'N/A'}</p>
-                                        </div>
-                                        <div style={{ width: '100%' }}>
-                                            <p style={{ fontWeight: '700', color: 'var(--text-light)', marginBottom: '0.25rem' }}>Feelings:</p>
-                                            <p style={{ color: 'var(--text-muted)', paddingLeft: '1rem', whiteSpace: 'pre-wrap' }}>{item.feelings || 'N/A'}</p>
-                                        </div>
-                                        <div style={{ width: '100%' }}>
-                                            <p style={{ fontWeight: '700', color: 'var(--text-light)', marginBottom: '0.25rem' }}>Behaviors:</p>
-                                            <p style={{ color: 'var(--text-muted)', paddingLeft: '1rem', whiteSpace: 'pre-wrap' }}>{item.behaviors || 'N/A'}</p>
-                                        </div>
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : (
-                            <p className="no-history-message">Your past reflections will appear here.</p>
-                        )}
-                    </div>
-                </main>
-            </div>
-        </div>
-    );
-};
-
-
-// --- Values Exercise Page Component (formerly KnowYourselfPage) ---
-
-const valuesData = [
-  { title: 'Achievement', description: 'To accomplish something important and successfully.' },
-  { title: 'Adventure', description: 'To have new and exciting experiences.' },
-  { title: 'Autonomy', description: 'To be independent and have control over your own life.' },
-  { title: 'Challenges', description: 'To take on difficult tasks and situations.' },
-  { title: 'Change', description: 'To experience variety and new things.' },
-  { title: 'Community', description: 'To be part of a group and feel a sense of belonging.' },
-  { title: 'Competence', description: 'To be skilled and capable in your actions.' },
-  { title: 'Competition', description: 'To engage in contests and win.' },
-  { title: 'Cooperation', description: 'To work together with others for a common purpose.' },
-  { title: 'Creativity', description: 'To create new things or ideas.' },
-  { title: 'Decisiveness', description: 'To make decisions quickly and confidently.' },
-  { title: 'Diversity', description: 'To have a variety of people and cultures around you.' },
-  { title: 'Ecology / Environment', description: 'To live in harmony with and protect natural resources.' },
-  { title: 'Education', description: 'To learn and acquire knowledge.' },
-  { title: 'Ethics', description: 'To live in a way that is morally right.' },
-  { title: 'Excellence', description: 'To be the best in what you do.' },
-  { title: 'Excitement', description: 'To experience a state of enthusiasm and eagerness.' },
-  { title: 'Fairness', description: 'To treat people equally and justly.' },
-  { title: 'Faith', description: 'To have belief and trust, especially in a higher power.' },
-  { title: 'Fame', description: 'To be known and recognized by many people.' },
-  { title: 'Family', description: 'To have a happy, loving family.' },
-  { title: 'Flexibility', description: 'To adapt to changes and new circumstances.' },
-  { title: 'Freedom', description: 'To have the ability to act, speak, or think without restraint.' },
-  { title: 'Friendship', description: 'To have close, supportive friends.' },
-  { title: 'Happiness', description: 'To feel content and joyful.' },
-  { title: 'Health', description: 'To be physically and mentally well.' },
-  { title: 'Helping Others', description: 'To assist and support other people.' },
-  { title: 'Honesty', description: 'To be truthful and sincere.' },
-  { title: 'Independence', description: 'To be self-reliant and free from the control of others.' },
-  { title: 'Integrity', description: 'To adhere to moral and ethical principles.' },
-  { title: 'Leadership', description: 'To guide or direct a group.' },
-  { title: 'Loyalty', description: 'To be faithful to your commitments or to others.' },
-  { title: 'Meaningful Work', description: 'To have a job that feels significant and purposeful.' },
-  { title: 'Money', description: 'To have financial resources.' },
-  { title: 'Order', description: 'To have a life that is well-organized and predictable.' },
-  { title: 'Philanthropy', description: 'To promote the welfare of others, especially by donating money.' },
-  { title: 'Play', description: 'To have fun and recreation.' },
-  { title: 'Pleasure', description: 'To experience enjoyment and satisfaction.' },
-  { title: 'Power', description: 'To have control or influence over others.' },
-  { title: 'Privacy', description: 'To have time and space for yourself.' },
-  { title: 'Recognition', description: 'To get appreciation and credit for your achievements.' },
-  { title: 'Relationships', description: 'To have deep and meaningful connections with others.' },
-  { title: 'Religion', description: 'To practice a specific faith or belief system.' },
-  { title: 'Safety', description: 'To be protected from harm or danger.' },
-  { title: 'Security', description: 'To feel safe and have a stable life.' },
-  { title: 'Service', description: 'To help or do work for others.' },
-  { title: 'Spirituality', description: 'To have a sense of connection to something bigger than yourself.' },
-  { title: 'Stability', description: 'To have consistency and predictability in your life.' },
-  { title: 'Status', description: 'To have a high social or professional standing.' },
-  { title: 'Wealth', description: 'To have a great deal of money, possessions, or resources.' },
-  { title: 'Work', description: 'To have a job or career.' },
-];
-
-const valuesDataShort = [
-    { title: 'Achievement', description: 'To accomplish something important and successfully.' },
-    { title: 'Autonomy', description: 'To be independent and have control over your own life.' },
-    { title: 'Challenges', description: 'To take on difficult tasks and situations.' },
-    { title: 'Community', description: 'To be part of a group and feel a sense of belonging.' },
-    { title: 'Cooperation', description: 'To work together with others for a common purpose.' },
-    { title: 'Creativity', description: 'To create new things or ideas.' },
-    { title: 'Decisiveness', description: 'To make decisions quickly and confidently.' },
-    { title: 'Education', description: 'To learn and acquire knowledge.' },
-    { title: 'Ethics', description: 'To live in a way that is morally right.' },
-    { title: 'Excellence', description: 'To be the best in what you do.' },
-    { title: 'Fairness', description: 'To treat people equally and justly.' },
-    { title: 'Family', description: 'To have a happy, loving family.' },
-    { title: 'Freedom', description: 'To have the ability to act, speak, or think without restraint.' },
-    { title: 'Friendship', description: 'To have close, supportive friends.' },
-    { title: 'Happiness', description: 'To feel content and joyful.' },
-    { title: 'Health', description: 'To be physically and mentally well.' },
-    { title: 'Helping Others', description: 'To assist and support other people.' },
-    { title: 'Honesty', description: 'To be truthful and sincere.' },
-    { title: 'Integrity', description: 'To adhere to moral and ethical principles.' },
-    { title: 'Meaningful Work', description: 'To have a job that feels significant and purposeful.' },
-    { title: 'Play', description: 'To have fun and recreation.' },
-    { title: 'Relationships', description: 'To have deep and meaningful connections with others.' },
-    { title: 'Safety', description: 'To be protected from harm or danger.' },
-    { title: 'Spirituality', description: 'To have a sense of connection to something bigger than yourself.' }
-];
-
-const shuffle = (array) => {
-  let currentIndex = array.length,  randomIndex;
-  const newArray = [...array];
-  while (currentIndex !== 0) {
-    randomIndex = Math.floor(Math.random() * currentIndex);
-    currentIndex--;
-    [newArray[currentIndex], newArray[randomIndex]] = [newArray[randomIndex], newArray[currentIndex]];
-  }
-  return newArray;
-};
-
-const ValuesExercisePage = ({ onBack, initialStep = 'deck-selection' }) => {
-  const [exerciseStep, setExerciseStep] = useState(initialStep); // 'deck-selection', 'sort-all', 'sort-top-10', 'sort-top-5', 'results'
-  const [deck, setDeck] = useState([]);
-  const [keepPile, setKeepPile] = useState([]);
-  const [discardPile, setDiscardPile] = useState([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [animation, setAnimation] = useState('');
-  const [activeTab, setActiveTab] = useState('keep');
-  const [showTutorial, setShowTutorial] = useState(false);
-
-  const startExercise = (deckData) => {
-    if (!localStorage.getItem('valuesTutorialShown')) {
-        setShowTutorial(true);
-    }
-    setDeck(shuffle(deckData));
-    setKeepPile([]);
-    setDiscardPile([]);
-    setCurrentIndex(0);
-    setExerciseStep('sort-all');
-    setActiveTab('keep');
-  }
-
-  const handleCloseTutorial = () => {
-    setShowTutorial(false);
-    localStorage.setItem('valuesTutorialShown', 'true');
-  };
-
-  const handleSort = (pile) => {
-    if (currentIndex >= deck.length) return;
-
-    const card = deck[currentIndex];
-    const newAnimation = pile === 'keep' ? 'slide-out-right' : 'slide-out-left';
-    setAnimation(newAnimation);
-
-    setTimeout(() => {
-        if (pile === 'keep') {
-            setKeepPile(prev => [...prev, card]);
-        } else {
-            setDiscardPile(prev => [...prev, card]);
-        }
-        setCurrentIndex(prev => prev + 1);
-        setAnimation(''); // Reset animation
-    }, 300); // Duration should match CSS animation
-  };
-  
-  const handleRestoreDiscardedCard = (cardToRestore) => {
-    setDiscardPile(prev => prev.filter(c => c.title !== cardToRestore.title));
-    setDeck(prev => [...prev, cardToRestore]);
-  };
-
-  const handleUndoKeep = (cardToUndo) => {
-    setKeepPile(prev => prev.filter(c => c.title !== cardToUndo.title));
-    setDeck(prev => [...prev, cardToUndo]);
-  };
-  
-  const nextStep = () => {
-      if (exerciseStep === 'sort-all') {
-          setDeck(shuffle(keepPile));
-          setExerciseStep('sort-top-10');
-      } else if (exerciseStep === 'sort-top-10') {
-          setDeck(shuffle(keepPile));
-          setExerciseStep('sort-top-5');
-      } else if (exerciseStep === 'sort-top-5') {
-          try {
-            localStorage.setItem('coreValues', JSON.stringify(keepPile));
-            trackEvent('complete_exercise', 'Values', 'Values Exercise', keepPile.length);
-          } catch(e) {
-            console.error("Could not save core values to localStorage", e)
-          }
-          setExerciseStep('results');
-          return; // No need to reset state for results
-      }
-      // Reset for next round
-      setKeepPile([]);
-      setDiscardPile([]);
-      setCurrentIndex(0);
-      setActiveTab('keep');
-  };
-  
-  const getStepInfo = () => {
-      switch(exerciseStep) {
-          case 'sort-all':
-              return { title: 'Values Exercise', instruction: "Sort the cards into two piles: one for values that fit you well, and one for values that don't.", limit: Infinity, nextButtonText: "Next" };
-          case 'sort-top-10':
-              return { title: 'Select Your Top 10', instruction: "From your 'keep' pile, choose the 10 values that are most important to you.", limit: 10, nextButtonText: "Next" };
-          case 'sort-top-5':
-              return { title: 'Find Your Core 5', instruction: 'From your top 10, choose the 5 core values that are most essential to you.', limit: 5, nextButtonText: "See Results" };
-          default:
-              return {};
-      }
-  }
-  
-  const { title, instruction, limit, nextButtonText } = getStepInfo();
-
-  const isKeepLimitReached = keepPile.length >= limit;
-  const isDeckEmpty = currentIndex >= deck.length;
-  const isRoundComplete = isDeckEmpty || (isKeepLimitReached && exerciseStep !== 'sort-all');
-  
-  const showNextButton = (exerciseStep === 'sort-all' && isDeckEmpty) || (exerciseStep !== 'sort-all' && (isKeepLimitReached || (isDeckEmpty && keepPile.length > 0)));
-
-  if (exerciseStep === 'deck-selection') {
-    return (
-      <div className="page-container">
-        <div className="content-with-side-button">
-            <div className="side-button-wrapper">
-                <button onClick={onBack} className="home-button" aria-label="Go back">
-                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                   <span>Back</span>
+        <div className="page-container" style={{paddingTop: '1rem'}}>
+            <header className="page-header-text" style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
                 </button>
-            </div>
+                 <h1 className="app-title">Gratitude Log</h1>
+            </header>
+
             <main>
-                <div className="page-header-text">
-                    <h1 className="app-title">Choose Your Deck</h1>
-                    <p className="app-subtitle">Select the set of values you'd like to work with.</p>
-                </div>
-                <div className="card-grid" style={{maxWidth: '800px'}}>
-                    <button className="card" onClick={() => startExercise(valuesData)}>
-                        <h2 className="card-title">Standard Deck</h2>
-                        <p className="card-description">A comprehensive list of 51 common values for a broad exploration.</p>
-                    </button>
-                    <button className="card" onClick={() => startExercise(valuesDataShort)}>
-                        <h2 className="card-title">Focused Deck</h2>
-                        <p className="card-description">A curated list of 24 core values for a quicker reflection.</p>
-                    </button>
-                </div>
+                <form onSubmit={handleLogEntry} className="card tracker-section">
+                    <p className="tracker-description">Take a moment to list three things you are grateful for today.</p>
+                    
+                    {items.map((item, index) => (
+                         <div className="form-group" key={index}>
+                            <label htmlFor={`gratitude-item-${index + 1}`}>Thing #{index + 1}</label>
+                            <textarea
+                                id={`gratitude-item-${index + 1}`}
+                                value={item}
+                                onChange={(e) => handleItemChange(index, e.target.value)}
+                                placeholder="What went well today? What are you thankful for?"
+                                rows={3}
+                                required
+                            />
+                        </div>
+                    ))}
+                    
+                    <button type="submit" className="log-button" disabled={isLogButtonDisabled} style={{marginTop: '1rem'}}>Log Gratitude</button>
+                    {showConfirmation && <p className="confirmation-message">Gratitude logged successfully!</p>}
+                </form>
+
+                <section className="history-section">
+                    <hr className="history-divider" />
+                    <h3 className="history-title">History</h3>
+                    {history.length > 0 ? (
+                        <ul className="history-list">
+                            {history.slice(0, 10).map(entry => (
+                                <li key={entry.date} className="history-item gratitude-history-item">
+                                    <div className="gratitude-history-item-date">
+                                        {new Date(entry.date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                                    </div>
+                                    <ul className="gratitude-history-item-list">
+                                        {entry.items.map((gratitudeItem, idx) => (
+                                            <li key={idx}>{gratitudeItem}</li>
+                                        ))}
+                                    </ul>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p className="no-history-message">Your gratitude history will appear here.</p>
+                    )}
+                </section>
             </main>
-        </div>
-      </div>
-    );
-  }
-  
-  if (exerciseStep === 'results') {
-    return (
-        <div className="page-container">
-            <div className="content-with-side-button">
-                 <div className="side-button-wrapper"></div>
-                 <main>
-                    <div className="page-header-text">
-                        <h1 className="app-title">Your {keepPile.length} Core Values</h1>
-                        <p className="app-subtitle">These are the values you identified as most essential to you.</p>
-                    </div>
-                    <div className="values-results-grid">
-                        {keepPile.map(card => (
-                            <div key={card.title} className="value-card-result">
-                                <h3>{card.title}</h3>
-                                <p>{card.description}</p>
-                            </div>
-                        ))}
-                    </div>
-                    <div className="results-summary card">
-                        <p>Understanding your core values is the first step in setting meaningful goals. Use these values as a guide to create a life that feels authentic and fulfilling.</p>
-                    </div>
-                    <button onClick={onBack} className="exercise-nav-button" style={{marginTop: '2rem'}}>
-                        Done
-                    </button>
-                 </main>
-            </div>
         </div>
     );
-  }
-
-  const currentCard = deck[currentIndex];
-
-  return (
-    <div className="page-container">
-        {showTutorial && (
-            <div className="values-tutorial-overlay" onClick={handleCloseTutorial}>
-                <div className="tutorial-content" onClick={e => e.stopPropagation()}>
-                    <div className="tutorial-annotation tutorial-restore">
-                        <p>Changed your mind? Click the <span className="plus-icon-imitation">+</span> icon on a sorted card to move it back to the deck.</p>
-                    </div>
-                    <div className="tutorial-annotation tutorial-discard">
-                        <p>Click or tap the <strong>left side</strong> of the card to discard it.</p>
-                    </div>
-                    <div className="tutorial-annotation tutorial-keep">
-                        <p>Click or tap the <strong>right side</strong> of the card to keep it.</p>
-                    </div>
-                    <button onClick={handleCloseTutorial} className="tutorial-close-button">
-                        Got It!
-                    </button>
-                </div>
-            </div>
-        )}
-        <div className="content-with-side-button">
-            <div className="side-button-wrapper">
-                 <button onClick={onBack} className="home-button" aria-label="Go back to home">
-                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                   <span>Back</span>
-                 </button>
-            </div>
-            <main className="values-exercise-container">
-                <div className="page-header-text">
-                  <h1 className="app-title orange-underline">{title}</h1>
-                  <p className="app-subtitle">{instruction}</p>
-                </div>
-
-                <div className="values-piles-tabs">
-                    <div className="values-tab-buttons">
-                        <button className={`tab-button ${activeTab === 'discard' ? 'active' : ''}`} onClick={() => setActiveTab('discard')}>
-                            Discard ({discardPile.length})
-                        </button>
-                        <button className={`tab-button ${activeTab === 'keep' ? 'active' : ''}`} onClick={() => setActiveTab('keep')}>
-                            Keep ({keepPile.length})
-                        </button>
-                    </div>
-                    <div className="values-tab-content">
-                        {activeTab === 'keep' && (
-                            <>
-                                {keepPile.length === 0 && <p className="empty-pile-message">Cards you keep will appear here.</p>}
-                                <div className="pile-grid">
-                                    {keepPile.map(card => (
-                                        <div key={card.title} className="pile-card keep">
-                                            <span>{card.title}</span>
-                                            <button onClick={() => handleUndoKeep(card)} className="restore-button" aria-label={`Move ${card.title} back to deck`}>
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                                            </button>
-                                        </div>
-                                    ))}
-                                </div>
-                            </>
-                        )}
-                        {activeTab === 'discard' && (
-                             <>
-                                {discardPile.length === 0 && <p className="empty-pile-message">Cards you discard will appear here.</p>}
-                                <div className="pile-grid">
-                                    {discardPile.map(card => (
-                                        <div key={card.title} className="pile-card discard">
-                                            <span>{card.title}</span>
-                                            <button onClick={() => handleRestoreDiscardedCard(card)} className="restore-button" aria-label={`Restore ${card.title}`}>
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                                            </button>
-                                        </div>
-                                    ))}
-                                </div>
-                            </>
-                        )}
-                    </div>
-                </div>
-
-                <div className="values-card-stack">
-                  {isRoundComplete ? (
-                    <div className="value-card placeholder-card">
-                        <h3>{isKeepLimitReached ? 'Limit Reached!' : 'Round Complete!'}</h3>
-                        <p>{keepPile.length} value{keepPile.length !== 1 && 's'} kept.</p>
-                        {showNextButton && <p>Press Next to continue.</p>}
-                    </div>
-                  ) : (
-                    <div key={currentIndex} className={`value-card ${animation}`}>
-                        <div className="card-content">
-                            <h2>{currentCard.title}</h2>
-                            <p>{currentCard.description}</p>
-                        </div>
-                        <div className="card-sort-overlay">
-                            <div className="card-sort-area left" onClick={() => handleSort('discard')}></div>
-                            <div className={`card-sort-area right ${isKeepLimitReached ? 'disabled' : ''}`} onClick={() => !isKeepLimitReached && handleSort('keep')}></div>
-                        </div>
-                    </div>
-                  )}
-                </div>
-                
-                <div className="values-controls">
-                    <span className="card-counter">{isRoundComplete ? `Done` : `${currentIndex + 1} / ${deck.length}`}</span>
-                </div>
-
-                {showNextButton && (
-                  <button onClick={nextStep} className="exercise-nav-button">
-                    {nextButtonText}
-                  </button>
-                )}
-            </main>
-        </div>
-    </div>
-  );
 };
 
 
-// --- Media Page Component ---
-const MediaPage = ({ onBack }) => {
-  const mediaCards = [
-    { 
-      title: 'Videos', 
-      link: 'https://www.youtube.com/playlist?list=PL1MHtsikpzrnje9hJbwVRhYry28G4jQz2',
-      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> 
+// --- Guided Meditation Page ---
+const MEDITATION_TRACKS = [
+    {
+        id: 'breathing_meditation',
+        title: 'Breathing Meditation',
+        subtitle: 'From UCLA Health',
+        duration: 300,
+        url: 'https://www.uclahealth.org/marc/mpeg/01_Breathing_Meditation.mp3',
     },
-    { 
-      title: 'Podcast', 
-      subtitle: 'powered by notebook lm',
-      link: 'https://www.youtube.com/playlist?list=PL1MHtsikpzrlXgHVnVD2txdA2weD0xDFX',
-      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+    {
+        id: 'mindful_break',
+        title: '5-Minute Mindful Break',
+        subtitle: 'Coming Soon',
+        duration: 323,
+        url: null,
     },
-  ];
+    {
+        id: 'body_scan',
+        title: 'Body Scan for Relaxation',
+        subtitle: 'Coming Soon',
+        duration: 1200,
+        url: null,
+    },
+];
 
-  return (
-    <div className="page-container">
-      <div className="content-with-side-button">
-        <div className="side-button-wrapper">
-          <button onClick={onBack} className="home-button" aria-label="Go back to home">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-            <span>Home</span>
-          </button>
-        </div>
-        <main>
-          <div className="page-header-text">
-            <h1 className="app-title">Media Resources</h1>
-            <p className="app-subtitle">Videos and podcasts to support your journey.</p>
-          </div>
-          <div className="card-grid">
-            {mediaCards.map((card) => (
-              <a
-                key={card.title}
-                href={card.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="card"
-                aria-label={card.title}
-              >
-                {card.icon}
-                <h2 className="card-title">{card.title}</h2>
-                {card.subtitle && <p className="card-subtitle">{card.subtitle}</p>}
-              </a>
-            ))}
-          </div>
-        </main>
-      </div>
-    </div>
-  );
-};
-
-// --- 5-4-3-2-1 Grounding Exercise Page Component ---
-const FiveFourThreeTwoOnePage = ({ onBack, onHome }) => {
-  const steps = [
-    "Name 5 things you can see.",
-    "Name 4 things you can feel.",
-    "Name 3 things you can hear.",
-    "Name 2 things you can smell.",
-    "Name 1 thing you can taste.",
-  ];
-
-  const [stepIndex, setStepIndex] = useState(0);
-  const [randomQuote, setRandomQuote] = useState(null);
-
-  const handleNext = () => {
-    if (stepIndex < steps.length - 1) {
-      setStepIndex(stepIndex + 1);
-    } else {
-      // Last step, show quote
-      const randomIndex = Math.floor(Math.random() * quotes.length);
-      setRandomQuote(quotes[randomIndex]);
-      setStepIndex(stepIndex + 1);
-
-      trackEvent('complete_exercise', 'Grounding', '5-4-3-2-1 Method');
-
-      // --- Log completion event ---
-      try {
-        const history = JSON.parse(localStorage.getItem('groundingHistory') || '[]');
-        history.unshift({ technique: 'The 5-4-3-2-1 Method', date: new Date().toISOString() });
-        localStorage.setItem('groundingHistory', JSON.stringify(history));
-      } catch (error) {
-        console.error("Could not save grounding history:", error);
-      }
-    }
-  };
-  
-  const isFinished = stepIndex >= steps.length;
-
-  return (
-    <div className="page-container">
-        <div className="content-with-side-button">
-            <div className="side-button-wrapper">
-              <button onClick={onBack} className="home-button" aria-label="Go back">
-                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                 <span>Back</span>
-              </button>
-            </div>
-            <main className="exercise-page-container">
-              <div className="page-header-text">
-                <h1 className="app-title">The 5-4-3-2-1 Method</h1>
-              </div>
-              <div className="exercise-card">
-                  {!isFinished ? (
-                      <p className="exercise-instruction">{steps[stepIndex]}</p>
-                  ) : (
-                      <div className="exercise-quote">
-                          <p>"{randomQuote?.quote}"</p>
-                          <span>- {randomQuote?.author}</span>
-                      </div>
-                  )}
-              </div>
-              <button onClick={isFinished ? onBack : handleNext} className="exercise-nav-button">
-                  {isFinished ? 'Finish' : 'Next'}
-              </button>
-            </main>
-        </div>
-    </div>
-  );
-};
-
-
-// --- Breathing Exercise Page Component ---
-const BreathingExercisePage = ({ onBack, onHome }) => {
-  const breathOptions = [5, 10, 15];
-  const [selectedBreaths, setSelectedBreaths] = useState(5);
-  const [isActive, setIsActive] = useState(false);
-  const [breathCount, setBreathCount] = useState(0);
-  const [isAnimating, setIsAnimating] = useState(false);
-  const [completionQuote, setCompletionQuote] = useState(null);
-  const [breathPhase, setBreathPhase] = useState(''); // 'Inhale' or 'Exhale'
-
-  useEffect(() => {
-    let cycleTimer;
-    let phaseTimer;
-
-    if (isActive) {
-      const runCycle = (count) => {
-        if (count >= selectedBreaths) {
-          setIsActive(false);
-          setIsAnimating(false);
-          const randomIndex = Math.floor(Math.random() * quotes.length);
-          setCompletionQuote(quotes[randomIndex]);
-          setBreathPhase('');
-          trackEvent('complete_exercise', 'Grounding', 'Breathing', selectedBreaths);
-           // --- Log completion event ---
-          try {
-            const history = JSON.parse(localStorage.getItem('groundingHistory') || '[]');
-            history.unshift({ technique: 'Breathing', date: new Date().toISOString() });
-            localStorage.setItem('groundingHistory', JSON.stringify(history));
-          } catch (error) {
-              console.error("Could not save grounding history:", error);
-          }
-          return;
-        }
-
-        setBreathCount(count + 1);
-        setIsAnimating(true);
-        setBreathPhase('Inhale');
-
-        phaseTimer = setTimeout(() => {
-          setBreathPhase('Exhale');
-        }, 4000); // Inhale duration is 4s
-
-        cycleTimer = setTimeout(() => {
-          runCycle(count + 1);
-        }, 10000); // Total cycle is 10s
-      };
-      runCycle(0);
-    }
-
-    return () => {
-      clearTimeout(cycleTimer);
-      clearTimeout(phaseTimer);
-    };
-  }, [isActive, selectedBreaths]);
-
-  const handleStartStop = () => {
-    if (isActive) { // If currently running, stop it
-      setIsActive(false);
-      setBreathCount(0);
-      setIsAnimating(false);
-      setCompletionQuote(null);
-      setBreathPhase('');
-    } else { // If stopped, start it
-      setCompletionQuote(null); // Reset quote before starting
-      setBreathCount(0);
-      setIsActive(true);
-    }
-  };
-
-  const handleSelectBreaths = (num) => {
-    if (!isActive) { // only allow change if not active
-      setSelectedBreaths(num);
-      setCompletionQuote(null); // Reset if selection changes
-    }
-  }
-
-  const isFinished = completionQuote !== null;
-
-  return (
-    <div className="page-container">
-       <div className="content-with-side-button">
-            <div className="side-button-wrapper">
-              <button onClick={onBack} className="home-button" aria-label="Go back">
-                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                 <span>Back</span>
-              </button>
-            </div>
-            <main className="exercise-page-container">
-              <div className="page-header-text">
-                <h1 className="app-title">Breathing Exercise</h1>
-              </div>
-              <div className="breath-choice-container">
-                {breathOptions.map(num => (
-                    <button 
-                        key={num} 
-                        className={`breath-choice-button ${selectedBreaths === num ? 'selected' : ''}`}
-                        onClick={() => handleSelectBreaths(num)}
-                        disabled={isActive}
-                    >
-                        {num} Breaths
-                    </button>
-                ))}
-              </div>
-
-              <div className={`breathing-circle-container ${isAnimating ? 'animating' : ''}`}>
-                 <div className="breathing-circle">
-                     {isFinished ? (
-                         <div className="exercise-quote breathing-quote">
-                             <p>"{completionQuote.quote}"</p>
-                             <span>- {completionQuote.author}</span>
-                         </div>
-                     ) : isActive ? (
-                         <>
-                            <div className="breathing-phase">{breathPhase}</div>
-                            <div className="breathing-count-display">{breathCount}</div>
-                         </>
-                     ) : (
-                         <div className="breathing-text">Ready to begin?</div>
-                     )}
-                 </div>
-              </div>
-
-              <button onClick={isFinished ? onBack : handleStartStop} className="exercise-nav-button">
-                  {isFinished ? 'Finish' : (isActive ? 'Stop' : 'Start')}
-              </button>
-            </main>
-        </div>
-    </div>
-  );
-};
-
-
-// --- Guided Audio Grounding Exercise Page Component ---
-const GuidedAudioPage = ({ onBack, onHome }) => {
+const GuidedMeditationPage = ({ navigate }) => {
+    const [selectedTrack, setSelectedTrack] = useState<(typeof MEDITATION_TRACKS)[number] | null>(null);
     const [isPlaying, setIsPlaying] = useState(false);
-    const [isFinished, setIsFinished] = useState(false);
-    const [duration, setDuration] = useState(0);
     const [currentTime, setCurrentTime] = useState(0);
-    const audioRef = useRef(null);
-    const progressBarRef = useRef(null);
+    const [duration, setDuration] = useState(0);
+    const [history, setHistory] = useState<MeditationEntry[]>([]);
+    const audioRef = useRef<HTMLAudioElement>(null);
 
-    const handlePlayPause = () => {
-        if (isPlaying) {
-            audioRef.current.pause();
-        } else {
-            audioRef.current.play();
-        }
-        setIsPlaying(!isPlaying);
-    };
+    useEffect(() => {
+        const storedHistory = JSON.parse(localStorage.getItem('meditationHistory') || '[]') as MeditationEntry[];
+        setHistory(storedHistory);
+    }, []);
 
-    const handleTimeUpdate = () => {
-        setCurrentTime(audioRef.current.currentTime);
-    };
+    useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
 
-    const handleLoadedMetadata = () => {
-        setDuration(audioRef.current.duration);
-    };
+        const setAudioData = () => setDuration(audio.duration);
+        const setAudioTime = () => setCurrentTime(audio.currentTime);
 
-    const handleEnded = () => {
-        setIsPlaying(false);
-        setIsFinished(true);
-        trackEvent('complete_exercise', 'Grounding', 'Guided Audio');
-        try {
-            const history = JSON.parse(localStorage.getItem('groundingHistory') || '[]');
-            history.unshift({ technique: 'Guided Audio', date: new Date().toISOString() });
-            localStorage.setItem('groundingHistory', JSON.stringify(history));
-        } catch (error) {
-            console.error("Could not save grounding history:", error);
+        audio.addEventListener('loadedmetadata', setAudioData);
+        audio.addEventListener('timeupdate', setAudioTime);
+
+        return () => {
+            audio.removeEventListener('loadedmetadata', setAudioData);
+            audio.removeEventListener('timeupdate', setAudioTime);
+        };
+    }, [selectedTrack]);
+
+    const togglePlayPause = () => {
+        if (audioRef.current) {
+            if (isPlaying) {
+                audioRef.current.pause();
+            } else {
+                audioRef.current.play();
+            }
+            setIsPlaying(!isPlaying);
         }
     };
     
-    const handleProgressScrub = (e) => {
-        const progressBar = progressBarRef.current;
-        const rect = progressBar.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const newTime = (x / progressBar.offsetWidth) * duration;
-        if (!isNaN(newTime)) {
-          audioRef.current.currentTime = newTime;
-          setCurrentTime(newTime);
+    const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (audioRef.current) {
+            const newTime = Number(e.target.value);
+            audioRef.current.currentTime = newTime;
+            setCurrentTime(newTime);
         }
     };
 
-    const formatTime = (timeInSeconds) => {
+    const handleSessionEnd = () => {
+        if (!selectedTrack) return;
+        setIsPlaying(false);
+        const newEntry: MeditationEntry = {
+            date: new Date().toISOString(),
+            title: selectedTrack.title,
+            duration: selectedTrack.duration,
+        };
+
+        const updatedHistory = [newEntry, ...history];
+        localStorage.setItem('meditationHistory', JSON.stringify(updatedHistory));
+        setHistory(updatedHistory);
+        window.dispatchEvent(new Event('app:action'));
+    };
+    
+    const formatTime = (timeInSeconds: number) => {
         const minutes = Math.floor(timeInSeconds / 60);
         const seconds = Math.floor(timeInSeconds % 60);
         return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
     };
 
-    const progressPercentage = duration > 0 ? (currentTime / duration) * 100 : 0;
-
-    return (
-        <div className="page-container">
-            <audio
-                ref={audioRef}
-                src="https://www.uclahealth.org/marc/mpeg/01_Breathing_Meditation.mp3"
-                onLoadedMetadata={handleLoadedMetadata}
-                onTimeUpdate={handleTimeUpdate}
-                onEnded={handleEnded}
-                onPlay={() => setIsPlaying(true)}
-                onPause={() => setIsPlaying(false)}
-            />
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                        <span>Back</span>
+    if (selectedTrack && selectedTrack.url) {
+        return (
+            <div className="page-container" style={{ paddingTop: '1rem' }}>
+                <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                    <button onClick={() => setSelectedTrack(null)} className="back-button" aria-label="Back to Meditation List">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
                     </button>
-                </div>
-                <main className="exercise-page-container">
-                    <div className="page-header-text">
-                        <h1 className="app-title">Guided Grounding</h1>
-                        <p className="app-subtitle">Close your eyes, relax, and follow the voice.</p>
-                    </div>
-                    <div className="audio-player-container">
-                        <div className="audio-visual-placeholder">
-                           <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M7 18a4.6 4.4 0 0 1 0-9h0a5 5 0 0 1 11 2h1a3.5 3.5 0 0 1 0 7Z"/><path d="M12 12v3"/></svg>
+                    <h1 className="app-title">Now Playing</h1>
+                </header>
+                <main>
+                    <div className="card meditation-player-card">
+                        <div className="meditation-player-icon">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zM15.5 12c0-1.93-1.57-3.5-3.5-3.5S8.5 10.07 8.5 12H7c0-2.76 2.24-5 5-5s5 2.24 5 5h-1.5z"/></svg>
                         </div>
-                        
-                        <div className="audio-progress-bar-container" ref={progressBarRef} onClick={handleProgressScrub}>
-                            <div className="audio-progress-bar-filled" style={{ width: `${progressPercentage}%` }}></div>
-                        </div>
+                        <h2 className="meditation-player-title">{selectedTrack.title}</h2>
+                        <p className="meditation-player-subtitle">{selectedTrack.subtitle}</p>
 
-                        <div className="audio-time-display">
-                            <span>{formatTime(currentTime)}</span>
-                            <span>{formatTime(duration)}</span>
-                        </div>
-
-                        <div className="audio-controls">
-                            <button className={`play-pause-button ${isPlaying ? 'playing' : ''}`} onClick={handlePlayPause} aria-label={isPlaying ? 'Pause' : 'Play'}>
-                                <svg className="play-icon" xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"></path></svg>
-                                <svg className="pause-icon" xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path></svg>
+                        <div className="meditation-player-controls">
+                            <input
+                                type="range"
+                                className="meditation-progress-bar"
+                                value={currentTime}
+                                max={duration || 1}
+                                onChange={handleProgressChange}
+                            />
+                            <div className="meditation-time-display">
+                                <span>{formatTime(currentTime)}</span>
+                                <span>{formatTime(duration)}</span>
+                            </div>
+                            <button className={`meditation-play-button ${isPlaying ? 'playing' : ''}`} onClick={togglePlayPause} aria-label={isPlaying ? 'Pause' : 'Play'}>
+                                {isPlaying ? (
+                                    <svg className="pause-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                                ) : (
+                                    <svg className="play-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                                )}
                             </button>
                         </div>
-                         {isFinished && <p className="completion-text">Exercise complete. Well done.</p>}
+                        <audio ref={audioRef} src={selectedTrack.url} onEnded={handleSessionEnd}></audio>
                     </div>
-                    <button onClick={isFinished ? onBack : onHome} className="exercise-nav-button">
-                        {isFinished ? 'Finish' : 'Stop & Go Home'}
-                    </button>
                 </main>
+            </div>
+        );
+    }
+
+    return (
+        <div className="page-container" style={{ paddingTop: '1rem' }}>
+            <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                <h1 className="app-title">Guided Meditation</h1>
+            </header>
+            <main>
+                <div className="meditation-list">
+                    {MEDITATION_TRACKS.map(track => (
+                        <button key={track.id} className="card meditation-item" onClick={() => setSelectedTrack(track)} disabled={!track.url}>
+                            <div className="meditation-item-info">
+                                <h3 className="meditation-item-title">{track.title}</h3>
+                                <p className="meditation-item-subtitle">{track.subtitle}</p>
+                            </div>
+                            <span className="meditation-item-duration">{formatTime(track.duration)}</span>
+                        </button>
+                    ))}
+                </div>
+                <section className="history-section">
+                    <hr className="history-divider" />
+                    <h3 className="history-title">History</h3>
+                    {history.length > 0 ? (
+                        <ul className="history-list">
+                             {history.slice(0, 5).map((entry, index) => (
+                                <li key={index} className="history-item">
+                                    <div className="history-details" style={{flexGrow: 1}}>
+                                        <span><strong>{entry.title}</strong></span>
+                                        <span>{new Date(entry.date).toLocaleDateString()}</span>
+                                    </div>
+                                    <span>{formatTime(entry.duration)}</span>
+                                </li>
+                             ))}
+                        </ul>
+                    ) : (
+                        <p className="no-history-message">You haven't completed any meditations yet.</p>
+                    )}
+                </section>
+            </main>
+        </div>
+    );
+};
+
+
+// --- Helper component for dynamic string list in Safety Plan ---
+const DynamicListSection = ({ title, description, items, setItems, placeholder }) => {
+    const [newItem, setNewItem] = useState('');
+
+    const handleAddItem = () => {
+        if (newItem.trim()) {
+            setItems([...items, newItem.trim()]);
+            setNewItem('');
+        }
+    };
+
+    const handleRemoveItem = (indexToRemove) => {
+        setItems(items.filter((_, index) => index !== indexToRemove));
+    };
+
+    return (
+        <div className="plan-form-section">
+            <div className="plan-section-header">
+                <h3>{title}</h3>
+                <p>{description}</p>
+            </div>
+            {items.length > 0 && (
+                <div className="list-item-container">
+                    {items.map((item, index) => (
+                        <div key={index} className="list-item">
+                            <input type="text" value={item} readOnly disabled style={{flexGrow: 1}}/>
+                            <button type="button" onClick={() => handleRemoveItem(index)} className="remove-list-item-btn" aria-label={`Remove ${item}`}>
+                                 <svg viewBox="0 0 24 24" fill="currentColor" width="20px" height="20px"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+            <div className="form-group" style={{ flexDirection: 'row', gap: '0.5rem', alignItems: 'center', marginTop: items.length > 0 ? '1rem' : '0' }}>
+                <input
+                    type="text"
+                    value={newItem}
+                    onChange={(e) => setNewItem(e.target.value)}
+                    placeholder={placeholder}
+                    style={{flexGrow: 1}}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddItem(); }}}
+                />
+                <button type="button" onClick={handleAddItem} className="add-list-item-btn" style={{background: 'transparent', border: '1px solid var(--border-color)', padding: '0.7rem', flexShrink: 0, borderRadius: '8px', marginTop: 0}}>
+                    Add
+                </button>
             </div>
         </div>
     );
 };
 
-// --- Known Bugs Page Component ---
-const KnownBugsPage = ({ onBack }) => {
-  const bugs = [
-    { 
-      title: "Sobriety Clock Inaccuracy",
-      description: "The sobriety clock may briefly show an incorrect time when the app is first opened before correcting itself. This is due to initialization timing."
-    },
-    {
-      title: "Feelings Wheel Animation Lag",
-      description: "On some older devices or browsers, the animation for the feelings wheel may appear slow or choppy, especially on the first load."
-    },
-    {
-      title: "Goal Progress Not Refreshing Instantly",
-      description: "After updating a goal's progress, the 'Your Journey' summary page may not reflect the new average progress until the app is re-opened."
-    },
-    {
-      title: "Offline Data Sync",
-      description: "When using the app offline for an extended period, new data might not sync correctly with the cache immediately upon reconnecting."
-    }
-  ];
+// --- Helper component for dynamic contact list in Safety Plan ---
+const DynamicContactListSection = ({ title, description, contacts, setContacts, placeholderName, placeholderPhone, children }: { title: string, description: string, contacts: any[], setContacts: (newContacts: any[]) => void, placeholderName: string, placeholderPhone: string, children?: React.ReactNode }) => {
+    const [newName, setNewName] = useState('');
+    const [newPhone, setNewPhone] = useState('');
 
-  return (
-    <div className="page-container">
-      <div className="content-with-side-button">
-        <div className="side-button-wrapper">
-          <button onClick={onBack} className="home-button" aria-label="Go back to home">
-             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-             <span>Home</span>
-          </button>
+    const handleAddContact = () => {
+        if (newName.trim()) {
+            setContacts([...contacts, { id: Date.now(), name: newName.trim(), phone: newPhone.trim() }]);
+            setNewName('');
+            setNewPhone('');
+        }
+    };
+
+    const handleRemoveContact = (idToRemove) => {
+        setContacts(contacts.filter(c => c.id !== idToRemove));
+    };
+
+    return (
+        <div className="plan-form-section">
+            <div className="plan-section-header">
+                <h3>{title}</h3>
+                <p>{description}</p>
+            </div>
+            {children}
+            {contacts.length > 0 && (
+                <div className="contact-list">
+                    {contacts.map((contact) => (
+                        <div key={contact.id} className="contact-item" style={{flexDirection: 'column', alignItems: 'stretch', background: 'var(--bg-dark)', padding: '1rem', borderRadius: '8px', gap: '0.75rem'}}>
+                           <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                             <strong style={{color: 'var(--text-light)'}}>{contact.name}</strong>
+                             <button type="button" onClick={() => handleRemoveContact(contact.id)} className="remove-contact-btn" aria-label={`Remove ${contact.name}`}>
+                                <svg viewBox="0 0 24 24" fill="currentColor" width="20px" height="20px"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                             </button>
+                           </div>
+                           <p style={{color: 'var(--text-muted)'}}>{contact.phone || 'No phone number'}</p>
+                        </div>
+                    ))}
+                </div>
+            )}
+             <div className="form-group" style={{marginTop: '1rem'}}>
+                <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={placeholderName} />
+                <input type="tel" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} placeholder={placeholderPhone} />
+             </div>
+             <button type="button" onClick={handleAddContact} className="add-contact-btn" style={{alignSelf: 'flex-end'}}>
+                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                 Add Contact
+             </button>
         </div>
-        <main>
-          <div className="page-header-text">
-            <h1 className="app-title">Known Bugs</h1>
-            <p className="app-subtitle">A list of issues we're aware of and working on.</p>
-          </div>
-          <div className="card bug-list-container">
-            <ul className="bug-list">
-              {bugs.map((bug, index) => (
-                <li key={index} className="bug-item">
-                  <h3 className="bug-title">{bug.title}</h3>
-                  <p className="bug-description">{bug.description}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </main>
-      </div>
-    </div>
-  );
+    );
 };
 
-// --- Data Privacy Page Component ---
-const DataPrivacyPage = ({ onBack }) => {
-  return (
-    <div className="page-container">
-      <div className="content-with-side-button">
-        <div className="side-button-wrapper">
-          <button onClick={onBack} className="home-button" aria-label="Go back to home">
-             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-             <span>Home</span>
-          </button>
-        </div>
-        <main>
-          <div className="page-header-text">
-            <h1 className="app-title">Data Privacy & Storage</h1>
-          </div>
-          <div className="card" style={{ textAlign: 'left', alignItems: 'flex-start', gap: '1.5rem' }}>
-            <p style={{ lineHeight: 1.7 }}>
-              Your data, including journal entries and goals, is saved directly in your browser's local storage. This means your information is private to you and is not sent to any server.
-            </p>
-            <p style={{ lineHeight: 1.7, fontWeight: 600, color: 'var(--orange-accent)' }}>
-              To ensure your data persists, it is highly recommended to use the same browser and device for this application. Clearing your browser's cache or data may permanently delete all your saved information.
-            </p>
-          </div>
-        </main>
-      </div>
-    </div>
-  );
-};
-
-// --- Profile Page Component ---
-const ProfilePage = ({ onBack }) => {
-    const [profile, setProfile] = useState({ username: '', gender: '', dob: '' });
-    const [savedMessage, setSavedMessage] = useState('');
+// --- Safety Plan Page Component ---
+const SafetyPlanPage = ({ navigate }) => {
+    const [plan, setPlan] = useState({
+        warningSigns: '',
+        copingStrategies: [],
+        socialSettings: [],
+        peopleForHelp: [],
+        professionals: [],
+        safeEnvironment: '',
+        reasonsForLiving: '',
+    });
+    const [showConfirmation, setShowConfirmation] = useState(false);
+    const [userProfile, setUserProfile] = useState(null);
 
     useEffect(() => {
-        const storedProfile = localStorage.getItem('userProfile');
-        if (storedProfile) {
-            try {
-                const parsedProfile = JSON.parse(storedProfile);
-                setProfile({
-                    username: parsedProfile.username || '',
-                    gender: parsedProfile.gender || '',
-                    dob: parsedProfile.dob || ''
-                });
-            } catch (e) {
-                console.error("Failed to parse user profile", e);
-            }
-        }
-    }, []);
+        const storedPlan = JSON.parse(localStorage.getItem('safetyPlan') || '{}');
+        // Ensure all keys are present with correct types
+        setPlan(p => ({
+            warningSigns: storedPlan.warningSigns || '',
+            copingStrategies: storedPlan.copingStrategies || [],
+            socialSettings: storedPlan.socialSettings || [],
+            peopleForHelp: storedPlan.peopleForHelp || [],
+            professionals: storedPlan.professionals || [],
+            safeEnvironment: storedPlan.safeEnvironment || '',
+            reasonsForLiving: storedPlan.reasonsForLiving || '',
+        }));
 
-    const handleChange = (e) => {
-        const { name, value } = e.target;
-        setProfile(prev => ({ ...prev, [name]: value }));
-    };
+        const storedProfile = JSON.parse(localStorage.getItem('userProfile') || null);
+        setUserProfile(storedProfile);
+    }, []);
 
     const handleSave = (e) => {
         e.preventDefault();
-        try {
-            // Ensure username isn't saved as empty
-            if (!profile.username || profile.username.trim() === '') {
-                 setSavedMessage('Username cannot be empty.');
-                 setTimeout(() => setSavedMessage(''), 3000);
-                 return;
-            }
-            localStorage.setItem('userProfile', JSON.stringify(profile));
-            setSavedMessage('Profile updated successfully!');
-            setTimeout(() => setSavedMessage(''), 3000);
-            
-            // Force a re-render of the app to reflect username change, or use a more complex state management
-            // For now, simple reload on back might be easiest if name changes
-        } catch (error) {
-            console.error("Failed to save profile", error);
-            setSavedMessage('Error saving profile.');
-            setTimeout(() => setSavedMessage(''), 3000);
-        }
+        localStorage.setItem('safetyPlan', JSON.stringify(plan));
+        setShowConfirmation(true);
+        setTimeout(() => setShowConfirmation(false), 3000);
+        window.dispatchEvent(new Event('app:action'));
     };
 
-    return (
-        <div className="page-container">
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back to home">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                        <span>Home</span>
-                    </button>
-                </div>
-                <main>
-                    <div className="page-header-text">
-                        <h1 className="app-title">Edit Profile</h1>
-                        <p className="app-subtitle">Update your personal information.</p>
-                    </div>
-                    <form className="profile-form card" onSubmit={handleSave}>
-                        <div className="form-group">
-                            <label htmlFor="username">Username</label>
-                            <input
-                                id="username"
-                                name="username"
-                                type="text"
-                                value={profile.username}
-                                onChange={handleChange}
-                                placeholder="Enter your username"
-                            />
-                        </div>
-                        <div className="form-group">
-                            <label htmlFor="gender">Gender</label>
-                            <select id="gender" name="gender" value={profile.gender} onChange={handleChange}>
-                                <option value="">Select...</option>
-                                <option value="male">Male</option>
-                                <option value="female">Female</option>
-                                <option value="non-binary">Non-binary</option>
-                                <option value="other">Other</option>
-                                <option value="prefer-not-to-say">Prefer not to say</option>
-                            </select>
-                        </div>
-                        <div className="form-group">
-                            <label htmlFor="dob">Date of Birth</label>
-                            <input
-                                id="dob"
-                                name="dob"
-                                type="date"
-                                value={profile.dob}
-                                onChange={handleChange}
-                                style={{colorScheme: 'dark'}}
-                            />
-                        </div>
-                        <button type="submit" className="log-button">Save Changes</button>
-                        {savedMessage && <div className="confirmation-message" style={{opacity: 1, animation: 'none'}}>{savedMessage}</div>}
-                    </form>
-                </main>
-            </div>
-        </div>
-    );
-};
+    const handleShare = async () => {
+        const planText = `
+My Safety Plan (from Your Journey Your Tools):
 
+**1. Warning Signs (thoughts, images, mood, situation, behavior):**
+${plan.warningSigns || 'Not specified'}
 
-// --- AI Summary Modal Component ---
-const AISummaryModal = ({ onClose }) => {
-    const [summary, setSummary] = useState('');
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState('');
+**2. Internal Coping Strategies (things I can do to take my mind off problems without contacting anyone else):**
+${plan.copingStrategies.length > 0 ? plan.copingStrategies.map(s => `- ${s}`).join('\n') : 'Not specified'}
 
-    useEffect(() => {
-        const generateSummary = async () => {
-            try {
-                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-                
-                const journalHistoryRaw = localStorage.getItem('journalHistory');
-                const journalHistory = journalHistoryRaw ? JSON.parse(journalHistoryRaw) : [];
-                
-                const userProfileRaw = localStorage.getItem('userProfile');
-                const username = userProfileRaw ? JSON.parse(userProfileRaw).username : 'there';
+**3. People and Social Settings That Provide Distraction:**
+${plan.socialSettings.length > 0 ? plan.socialSettings.map(s => `- ${s}`).join('\n') : 'Not specified'}
 
-                if (journalHistory.length < 3) {
-                    setError("You need at least 3 journal entries to generate a summary.");
-                    setIsLoading(false);
-                    return;
+**4. People Whom I Can Ask for Help:**
+${plan.peopleForHelp.length > 0 ? plan.peopleForHelp.map(p => `- ${p.name}${p.phone ? ` (${p.phone})` : ''}`).join('\n') : 'Not specified'}
+
+**5. Professionals or Agencies I Can Contact During a Crisis:**
+${plan.professionals.length > 0 ? plan.professionals.map(p => `- ${p.name}${p.phone ? ` (${p.phone})` : ''}`).join('\n') : 'Not specified'}
+
+**6. Making the Environment Safe:**
+${plan.safeEnvironment || 'Not specified'}
+
+**7. My Reasons for Living:**
+${plan.reasonsForLiving || 'Not specified'}
+        `.trim().replace(/\n\n\n/g, '\n\n');
+
+        try {
+            if (navigator.share) {
+                await navigator.share({
+                    title: 'My Safety Plan',
+                    text: planText,
+                });
+                const currentEvents = JSON.parse(localStorage.getItem('eventHistory') || '[]') as string[];
+                if (!currentEvents.includes('share_safety_plan')) {
+                    localStorage.setItem('eventHistory', JSON.stringify([...currentEvents, 'share_safety_plan']));
+                    window.dispatchEvent(new Event('app:action'));
                 }
-
-                // Take the last 30 entries for brevity
-                const recentEntries = journalHistory.slice(0, 30);
-                
-                const formattedEntries = recentEntries.map(entry => {
-                    const displayAmount = entry.amountValue !== undefined 
-                        ? `${entry.amountValue} ${entry.amountUnit || ''}` 
-                        : entry.amount;
-                    return `Feeling: ${entry.feeling}, Day: ${entry.day}, Substance: ${entry.substance}, Amount: ${displayAmount.trim()}, Location: ${entry.location || 'N/A'}`;
-                }).join('\n');
-
-                const systemInstruction = `You are a compassionate and insightful journal assistant. Your goal is to help me understand myself better by analyzing my recent journal entries. Do not provide medical advice. 
-You should always address the user by their name. Provide a brief, insightful summary in 2-3 short paragraphs. Look for patterns related to feelings, substance use, and locations. Highlight any potential connections you notice in a supportive and gentle tone. Use markdown for formatting, like bolding key insights.`;
-
-                const userPrompt = `My name is ${username}. Here are my recent journal entries:
-${formattedEntries}
-
-Please provide my summary.`;
-                
-                trackEvent('generate_ai_summary', 'AI Features', 'Journal Summary');
-                const response = await ai.models.generateContent({
-                    model: 'gemini-2.5-flash',
-                    contents: userPrompt,
-                    config: {
-                        systemInstruction: systemInstruction,
-                    },
-                });
-
-                setSummary(response.text);
-
-            } catch (err) {
-                console.error("Error generating summary:", err);
-                setError("Sorry, an error occurred while generating your summary. Please try again later.");
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        generateSummary();
-    }, []);
-
-    const renderFormattedSummary = (text) => {
-        // Simple markdown parser for bold (**text**)
-        return text
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            .split('\n').map((paragraph, index) => (
-                paragraph.trim() ? <p key={index} dangerouslySetInnerHTML={{ __html: paragraph }} /> : null
-            ));
-    };
-
-    return (
-        <div className="confirm-modal-overlay" onClick={onClose}>
-            <div className="confirm-modal-content card summary-modal-content" onClick={e => e.stopPropagation()}>
-                <h3>Your AI-Powered Summary</h3>
-                {isLoading && (
-                    <div className="summary-loading">
-                        <div className="spinner"></div>
-                        <p>Analyzing your journal entries...</p>
-                    </div>
-                )}
-                {error && <p className="pin-error" style={{height: 'auto'}}>{error}</p>}
-                {!isLoading && !error && (
-                    <div className="summary-text">
-                        {renderFormattedSummary(summary)}
-                    </div>
-                )}
-                <div className="confirm-modal-actions" style={{justifyContent: 'center'}}>
-                    <button onClick={onClose} className="modal-button" style={{backgroundColor: 'var(--orange-accent)', color: 'var(--bg-dark)', flex: 'none', minWidth: '120px'}}>
-                        Close
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-};
-
-
-// --- Your Journey Page Component ---
-const JourneyPage = ({ onBack, onNavigate }) => {
-    const [coreValues, setCoreValues] = useState([]);
-    const [trackerStats, setTrackerStats] = useState(null);
-    const [groundingStats, setGroundingStats] = useState(null);
-    const [goalStats, setGoalStats] = useState(null);
-    const [isLoading, setIsLoading] = useState(true);
-    const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
-
-    useEffect(() => {
-        // Load Core Values
-        try {
-            const savedValues = localStorage.getItem('coreValues');
-            if (savedValues) {
-                setCoreValues(JSON.parse(savedValues));
+            } else {
+                await navigator.clipboard.writeText(planText);
+                alert('Safety Plan copied to clipboard!');
             }
         } catch (error) {
-            console.error("Could not parse core values from localStorage", error);
+            console.error('Error sharing safety plan:', error);
+            alert('Could not share or copy the plan.');
         }
-
-        // Process Tracker Data
-        try {
-            const savedHistory = localStorage.getItem('journalHistory');
-            const history = savedHistory ? JSON.parse(savedHistory) : [];
-            
-            const sevenDaysAgo = new Date();
-            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-            const fourteenDaysAgo = new Date();
-            fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
-
-            const last7DaysEntries = history.filter(entry => {
-                const entryDate = new Date(entry.entryTimestamp || entry.id);
-                return entryDate >= sevenDaysAgo;
-            });
-            
-            const hasNewDataFormat = last7DaysEntries.some(e => e.amountValue !== undefined);
-
-            if (last7DaysEntries.length > 0) {
-                if (hasNewDataFormat) {
-                    const substanceCounts = last7DaysEntries.reduce((acc, entry) => {
-                        acc[entry.substance] = (acc[entry.substance] || 0) + 1;
-                        return acc;
-                    }, {});
-                    const mostFrequentSubstance = Object.keys(substanceCounts).reduce((a, b) => substanceCounts[a] > substanceCounts[b] ? a : b);
-
-                    const last7MostFrequent = last7DaysEntries.filter(e => e.substance === mostFrequentSubstance);
-                    
-                    let mostCommonUnit = 'units';
-                    const unitCounts = last7MostFrequent.filter(e => e.amountUnit).reduce((acc, entry) => {
-                        const unit = entry.amountUnit.trim();
-                        if (unit) acc[unit] = (acc[unit] || 0) + 1;
-                        return acc;
-                    }, {});
-
-                    if (Object.keys(unitCounts).length > 0) {
-                        mostCommonUnit = Object.keys(unitCounts).reduce((a, b) => unitCounts[a] > unitCounts[b] ? a : b);
-                    }
-                    
-                    const totalAmountLast7Days = last7MostFrequent.reduce((sum, entry) => sum + (entry.amountValue || 0), 0);
-                    const avgDailyAmountLast7Days = totalAmountLast7Days / 7;
-
-                    const prev7DaysEntries = history.filter(entry => {
-                        const entryDate = new Date(entry.entryTimestamp || entry.id);
-                        return entryDate < sevenDaysAgo && entryDate >= fourteenDaysAgo && entry.substance === mostFrequentSubstance;
-                    });
-
-                    const totalAmountPrev7Days = prev7DaysEntries.reduce((sum, entry) => sum + (entry.amountValue || 0), 0);
-                    const avgDailyAmountPrev7Days = totalAmountPrev7Days / 7;
-
-                    let change = null;
-                    if (avgDailyAmountPrev7Days > 0) {
-                        change = ((avgDailyAmountLast7Days - avgDailyAmountPrev7Days) / avgDailyAmountPrev7Days) * 100;
-                    }
-
-                    setTrackerStats({
-                        mostFrequentSubstance,
-                        mostCommonUnit,
-                        totalAmountLast7Days,
-                        avgDailyAmountLast7Days,
-                        change,
-                    });
-                }
-            }
-        } catch (error) {
-            console.error("Could not process tracker data", error);
-        }
-
-        // Process Grounding Data
-        try {
-            const savedHistory = localStorage.getItem('groundingHistory');
-            const history = savedHistory ? JSON.parse(savedHistory) : [];
-            const sevenDaysAgo = new Date();
-            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-            
-            const last7DaysCount = history.filter(item => new Date(item.date) >= sevenDaysAgo).length;
-
-            if (history.length > 0) {
-                setGroundingStats({
-                    totalCount: history.length,
-                    last7DaysCount: last7DaysCount,
-                    lastUsed: new Date(history[0].date).toLocaleDateString(),
-                });
-            }
-        } catch (error) {
-            console.error("Could not process grounding data", error);
-        }
-        
-        // Process Goal Data
-        try {
-            const savedGoals = localStorage.getItem('goals');
-            const goals = savedGoals ? JSON.parse(savedGoals) : [];
-            const activeGoals = goals.filter(g => !g.completed);
-
-            if (activeGoals.length > 0) {
-                const totalProgress = activeGoals.reduce((sum, goal) => {
-                    const progress = (goal.currentValue / goal.targetValue) * 100;
-                    return sum + Math.min(progress, 100); // Cap progress at 100%
-                }, 0);
-                const averageProgress = totalProgress / activeGoals.length;
-                setGoalStats({
-                    activeGoalsCount: activeGoals.length,
-                    averageProgress: Math.round(averageProgress),
-                });
-            }
-        } catch (error) {
-            console.error("Could not process goal data", error);
-        }
-
-        setIsLoading(false);
-    }, []);
-
-    if (isLoading) {
-        return (
-            <div className="page-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '80vh' }}>
-                <div className="spinner"></div>
-            </div>
-        );
-    }
-    
-    return (
-        <div className="page-container">
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back to home">
-                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                       <span>Home</span>
-                    </button>
-                </div>
-                <main className="journey-content">
-                    <div className="page-header-text">
-                        <h1 className="app-title">Your Journey</h1>
-                        <p className="app-subtitle">An overview of your progress and insights.</p>
-                    </div>
-
-                    <div className="card-grid journey-grid">
-                        <div className="card summary-card">
-                            <h2 className="summary-card-title">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-                                <span>Core Values</span>
-                            </h2>
-                            {coreValues.length > 0 ? (
-                                <div className="values-summary-grid">
-                                    {coreValues.map(value => <span key={value.title} className="value-chip">{value.title}</span>)}
-                                </div>
-                            ) : (
-                                <div className="no-data-placeholder">
-                                    <p>You haven't identified your core values yet. Discovering them can provide a compass for your journey.</p>
-                                    <button onClick={() => onNavigate('values-exercise', { initialStep: 'deck-selection' })} className="exercise-nav-button">
-                                        Find Your Values
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="card summary-card">
-                            <h2 className="summary-card-title">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>
-                                <span>Tracker Insights</span>
-                            </h2>
-                            <p className="summary-card-subtitle">Last 7 Days vs. Previous 7 Days</p>
-                            {trackerStats ? (
-                                <div className="stats-container">
-                                    <div className="stat-item">
-                                        <span className="stat-label">Most Frequent</span>
-                                        <span className="stat-value">{trackerStats.mostFrequentSubstance}</span>
-                                    </div>
-                                    <div className="stat-item">
-                                        <span className="stat-label">Total Amount</span>
-                                        <span className="stat-value">{trackerStats.totalAmountLast7Days.toFixed(1)} {trackerStats.mostCommonUnit}</span>
-                                    </div>
-                                    <div className="stat-item">
-                                        <span className="stat-label">Daily Average</span>
-                                        <span className="stat-value">{trackerStats.avgDailyAmountLast7Days.toFixed(1)} {trackerStats.mostCommonUnit}</span>
-                                    </div>
-                                    <div className="stat-item">
-                                        <span className="stat-label">Change</span>
-                                        <span className={`stat-value ${trackerStats.change > 0 ? 'negative' : 'positive'}`}>
-                                            {trackerStats.change !== null ? `${trackerStats.change > 0 ? '+' : ''}${trackerStats.change.toFixed(0)}%` : 'N/A'}
-                                        </span>
-                                    </div>
-                                    <button className="ai-cta" onClick={() => setIsSummaryModalOpen(true)}>
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
-                                        <span>Generate AI Summary</span>
-                                    </button>
-                                </div>
-                            ) : (
-                                <div className="no-data-placeholder">
-                                    <p>Not enough data for insights. Log your feelings and use for at least a week to see patterns.</p>
-                                    <button onClick={() => onNavigate('tracker')} className="exercise-nav-button">
-                                        Go to Tracker
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                        
-                        <div className="card summary-card">
-                            <h2 className="summary-card-title">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 16.5a5 5 0 1 0 7 0"/><path d="M12 22a5 5 0 0 0 5-5c0-1.42-.64-2.7-1.69-3.58"/><path d="M12 22a5 5 0 0 1-5-5c0-1.42.64-2.7 1.69-3.58"/><path d="M12 12a5 5 0 0 0 5-5c0-1.42-.64-2.7-1.69-3.58"/><path d="M12 12a5 5 0 0 1-5-5c0-1.42.64-2.7 1.69-3.58"/><path d="M2 13.29a5 5 0 0 0 1.69 3.58"/><path d="M22 13.29a5 5 0 0 1-1.69 3.58"/><path d="M12 2a5 5 0 0 0-1.69 3.58"/><path d="M12 2a5 5 0 0 1 1.69 3.58"/></svg>
-                                <span>Grounding Exercises</span>
-                            </h2>
-                            {groundingStats ? (
-                                <div className="stats-container">
-                                    <div className="stat-item">
-                                        <span className="stat-label">Total Completed</span>
-                                        <span className="stat-value">{groundingStats.totalCount}</span>
-                                    </div>
-                                    <div className="stat-item">
-                                        <span className="stat-label">Last 7 Days</span>
-                                        <span className="stat-value">{groundingStats.last7DaysCount}</span>
-                                    </div>
-                                     <div className="stat-item">
-                                        <span className="stat-label">Last Used</span>
-                                        <span className="stat-value">{groundingStats.lastUsed}</span>
-                                    </div>
-                                </div>
-                            ) : (
-                               <div className="no-data-placeholder">
-                                    <p>Grounding exercises help in moments of stress. Try one to start building your history.</p>
-                                    <button onClick={() => onNavigate('toolkit')} className="exercise-nav-button">
-                                        Explore Techniques
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="card summary-card">
-                             <h2 className="summary-card-title">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
-                                <span>Goals</span>
-                            </h2>
-                             {goalStats ? (
-                                <div className="stats-container">
-                                    <div className="stat-item">
-                                        <span className="stat-label">Active Goals</span>
-                                        <span className="stat-value">{goalStats.activeGoalsCount}</span>
-                                    </div>
-                                    <div className="stat-item">
-                                        <span className="stat-label">Average Progress</span>
-                                        <span className="stat-value">{goalStats.averageProgress}%</span>
-                                    </div>
-                                    <button onClick={() => onNavigate('goals')} className="summary-card-cta" style={{width: '100%', textAlign: 'center', marginTop: '1rem'}}>
-                                        View & Update Goals
-                                    </button>
-                                </div>
-                            ) : (
-                               <div className="no-data-placeholder">
-                                    <p>Setting goals aligned with your values can be a powerful driver for change.</p>
-                                    <button onClick={() => onNavigate('goals')} className="exercise-nav-button">
-                                        Set a New Goal
-                                    </button>
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </main>
-            </div>
-             {isSummaryModalOpen && <AISummaryModal onClose={() => setIsSummaryModalOpen(false)} />}
-        </div>
-    );
-};
-
-// --- Goals Page Component ---
-const GoalsPage = ({ onBack, onNavigate }) => {
-    const [goals, setGoals] = useState([]);
-    const [view, setView] = useState('dashboard'); // 'dashboard', 'create'
-    const [activeTab, setActiveTab] = useState('active'); // 'active', 'completed'
-    const [logProgressGoal, setLogProgressGoal] = useState(null);
-    const [logValue, setLogValue] = useState('');
-
-    useEffect(() => {
-        try {
-            const savedGoals = localStorage.getItem('goals');
-            setGoals(savedGoals ? JSON.parse(savedGoals) : []);
-        } catch (e) { console.error("Could not load goals", e); }
-    }, []);
-
-    const saveGoals = (newGoals) => {
-        setGoals(newGoals);
-        try {
-            localStorage.setItem('goals', JSON.stringify(newGoals));
-        } catch (e) { console.error("Could not save goals", e); }
-    };
-
-    const handleCreateGoal = (goalData) => {
-        const newGoal = {
-            id: Date.now(),
-            ...goalData,
-            createdAt: new Date().toISOString(),
-            currentValue: 0,
-            completed: false,
-            completedAt: null,
-        };
-        saveGoals([newGoal, ...goals]);
-        setView('dashboard');
-        trackEvent('create_goal', 'Goals', goalData.title);
     };
     
-    const handleLogProgress = () => {
-        const updatedGoals = goals.map(g => {
-            if (g.id === logProgressGoal.id) {
-                const newValue = g.currentValue + parseFloat(logValue);
-                return { ...g, currentValue: Math.min(newValue, g.targetValue) };
-            }
-            return g;
-        });
-        saveGoals(updatedGoals);
-        setLogProgressGoal(null);
-        setLogValue('');
-        trackEvent('log_progress', 'Goals', logProgressGoal.title, parseFloat(logValue));
+    const handleTextChange = (e) => {
+        const { name, value } = e.target;
+        setPlan(p => ({ ...p, [name]: value }));
     };
 
-    const handleCompleteGoal = (goalId) => {
-        const updatedGoals = goals.map(g => {
-            if (g.id === goalId) {
-                return { ...g, completed: true, completedAt: new Date().toISOString(), currentValue: g.targetValue };
-            }
-            return g;
-        });
-        saveGoals(updatedGoals);
-        trackEvent('complete_goal', 'Goals', goals.find(g => g.id === goalId).title);
+    const addEmergencyContact = () => {
+        if (userProfile && userProfile.emergencyContactName) {
+            setPlan(p => ({
+                ...p,
+                peopleForHelp: [...p.peopleForHelp, { id: Date.now(), name: userProfile.emergencyContactName, phone: userProfile.emergencyContactPhone || '' }]
+            }));
+        }
     };
+    
+    const handleImportContacts = async () => {
+        const props = ['name', 'tel'];
+        const opts = { multiple: true };
+        try {
+            const contacts = await navigator.contacts.select(props, opts);
+            if (contacts.length > 0) {
+                const newContacts = contacts
+                    .map(contact => ({
+                        id: Date.now() + Math.random(),
+                        name: contact.name[0],
+                        phone: contact.tel[0] || ''
+                    }))
+                    .filter(newContact =>
+                        // Filter out duplicates already in the plan
+                        !plan.peopleForHelp.some(existing => existing.name === newContact.name && existing.phone === newContact.phone)
+                    );
 
-    const CreateGoalForm = ({ onSave, onNavigate }) => {
-        const [title, setTitle] = useState('');
-        const [targetValue, setTargetValue] = useState('');
-        const [unit, setUnit] = useState('');
-        const [achievable, setAchievable] = useState('');
-        const [relevant, setRelevant] = useState('');
-        const [deadline, setDeadline] = useState('');
-        const [coreValues, setCoreValues] = useState([]);
-        const [linkedValue, setLinkedValue] = useState('');
-
-        useEffect(() => {
-            try {
-                const savedValues = localStorage.getItem('coreValues');
-                if (savedValues) {
-                    setCoreValues(JSON.parse(savedValues));
+                if (newContacts.length > 0) {
+                     setPlan(p => ({
+                        ...p,
+                        peopleForHelp: [...p.peopleForHelp, ...newContacts]
+                    }));
                 }
-            } catch (e) { console.error("Could not load core values for goals", e); }
-        }, []);
-        
-        const handleSubmit = (e) => {
-            e.preventDefault();
-            if (title.trim() === '' || targetValue.trim() === '' || unit.trim() === '') return;
-            onSave({ 
-                title, 
-                targetValue: parseFloat(targetValue), 
-                unit, 
-                deadline, 
-                linkedValue,
-                achievableReason: achievable,
-                relevantReason: relevant,
-            });
-        };
-        
-        const isSaveDisabled = title.trim() === '' || targetValue.trim() === '' || unit.trim() === '';
+            }
+        } catch (ex) {
+            console.error('Error selecting contacts:', ex);
+            // The user may have canceled the picker, which is not an error we need to show them.
+        }
+    };
 
-        return (
-            <form className="create-goal-form smart-form-container" onSubmit={handleSubmit}>
-                <div className="smart-section-card">
-                    <div className="smart-section-header">
-                        <h3><span className="smart-letter">S</span>pecific</h3>
-                        <p>What is your goal? Be as clear and specific as possible.</p>
-                    </div>
-                    <input
-                        type="text"
-                        placeholder="e.g., Exercise 3 times a week"
-                        value={title}
-                        onChange={e => setTitle(e.target.value)}
-                        autoFocus
-                    />
+    return (
+        <div className="page-container" style={{ paddingTop: '1rem' }}>
+            <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" /></svg>
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <h1 className="app-title">Safety Plan</h1>
+                    <InfoTooltip text="This is a proactive tool to help you navigate moments of intense distress or crisis. By identifying your personal warning signs and coping strategies in advance, you create a clear guide to stay safe." />
                 </div>
+            </header>
+            <main>
+                <form onSubmit={handleSave} className="plan-form-container">
+                    <div className="plan-form-section">
+                        <div className="plan-section-header">
+                            <h3>1. Warning Signs</h3>
+                            <p>What thoughts, images, moods, situations, or behaviors tell you a crisis may be developing?</p>
+                        </div>
+                        <div className="form-group">
+                            <textarea
+                                name="warningSigns"
+                                value={plan.warningSigns}
+                                onChange={handleTextChange}
+                                rows={4}
+                                placeholder="e.g., Feeling hopeless, isolating myself..."
+                            />
+                        </div>
+                    </div>
 
-                <div className="smart-section-card">
-                     <div className="smart-section-header">
-                        <h3><span className="smart-letter">M</span>easurable</h3>
-                        <p>How will you measure your progress? Define a target and a unit.</p>
-                    </div>
-                    <div className="measurable-inputs">
-                        <input
-                            type="number"
-                            placeholder="e.g., 12"
-                            value={targetValue}
-                            onChange={e => setTargetValue(e.target.value)}
-                        />
-                        <input
-                            type="text"
-                            placeholder="e.g., workouts"
-                            value={unit}
-                            onChange={e => setUnit(e.target.value)}
-                        />
-                    </div>
-                </div>
-
-                <div className="smart-section-card">
-                    <div className="smart-section-header">
-                        <h3><span className="smart-letter">A</span>chievable</h3>
-                        <p>Is this goal realistic for you right now? (Optional)</p>
-                    </div>
-                     <textarea
-                        placeholder="e.g., I have free time in the evenings and can start with walking."
-                        value={achievable}
-                        onChange={e => setAchievable(e.target.value)}
-                        rows={3}
+                    <DynamicListSection
+                        title="2. Internal Coping Strategies"
+                        description="Things I can do on my own to distract myself and feel better."
+                        items={plan.copingStrategies}
+                        setItems={(newItems) => setPlan(p => ({ ...p, copingStrategies: newItems }))}
+                        placeholder="e.g., Listen to calming music..."
                     />
-                </div>
 
-                <div className="smart-section-card">
-                     <div className="smart-section-header">
-                        <h3><span className="smart-letter">R</span>elevant</h3>
-                        <p>Why is this goal important to you? How does it align with your values? (Optional)</p>
-                    </div>
-                    <textarea
-                        placeholder="e.g., This aligns with my value of Health and will improve my mood."
-                        value={relevant}
-                        onChange={e => setRelevant(e.target.value)}
-                        rows={3}
+                    <DynamicListSection
+                        title="3. People & Social Settings for Distraction"
+                        description="Places I can go or people I can be with to take my mind off things."
+                        items={plan.socialSettings}
+                        setItems={(newItems) => setPlan(p => ({ ...p, socialSettings: newItems }))}
+                        placeholder="e.g., Go to a coffee shop..."
                     />
-                    {coreValues.length > 0 ? (
-                        <div className="values-selection-grid">
-                            {coreValues.map(value => (
-                                <button
-                                    type="button"
-                                    key={value.title}
-                                    className={`value-selection-chip ${linkedValue === value.title ? 'selected' : ''}`}
-                                    onClick={() => setLinkedValue(linkedValue === value.title ? '' : value.title)}
-                                    title={value.description}
-                                >
-                                    {value.title}
+
+                    <DynamicContactListSection
+                        title="4. People I Can Ask for Help"
+                        description="Friends or family members I can talk to when I need support."
+                        contacts={plan.peopleForHelp}
+                        setContacts={(newContacts) => setPlan(p => ({ ...p, peopleForHelp: newContacts }))}
+                        placeholderName="e.g., Jane Doe"
+                        placeholderPhone="e.g., (555) 123-4567"
+                    >
+                        <div className="contact-actions-container">
+                             {userProfile?.emergencyContactName && !plan.peopleForHelp.some(p => p.name === userProfile.emergencyContactName) && (
+                                <button type="button" onClick={addEmergencyContact} className="add-contact-btn">
+                                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                                    Add {userProfile.emergencyContactName} (Emergency Contact)
                                 </button>
+                            )}
+                            {'contacts' in navigator && 'select' in navigator.contacts && (
+                                 <button type="button" onClick={handleImportContacts} className="add-contact-btn">
+                                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 4H6c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM6 18V6h12v12H6zm7-11h-2v2H9v2h2v2h2v-2h2v-2h-2V7zm-2 5c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3zm0 4c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z"/></svg>
+                                    Import from Contacts
+                                </button>
+                            )}
+                        </div>
+                    </DynamicContactListSection>
+
+                    <DynamicContactListSection
+                        title="5. Professionals or Agencies I Can Contact"
+                        description="My therapist, doctor, or crisis lines that I can call for help."
+                        contacts={plan.professionals}
+                        setContacts={(newContacts) => setPlan(p => ({ ...p, professionals: newContacts }))}
+                        placeholderName="e.g., Crisis Hotline"
+                        placeholderPhone="e.g., 988"
+                    />
+
+                    <div className="plan-form-section">
+                        <div className="plan-section-header">
+                            <h3>6. Making the Environment Safe</h3>
+                            <p>What can I do to make it less likely I will act on my thoughts of self-harm?</p>
+                        </div>
+                        <div className="form-group">
+                            <textarea
+                                name="safeEnvironment"
+                                value={plan.safeEnvironment}
+                                onChange={handleTextChange}
+                                rows={4}
+                                placeholder="e.g., Remove any means of harm from my home..."
+                            />
+                        </div>
+                    </div>
+                    
+                    <div className="plan-form-section">
+                        <div className="plan-section-header">
+                            <h3>7. My Reasons For Living</h3>
+                            <p>The most important things to me that are worth living for.</p>
+                        </div>
+                        <div className="form-group">
+                            <textarea
+                                name="reasonsForLiving"
+                                value={plan.reasonsForLiving}
+                                onChange={handleTextChange}
+                                rows={4}
+                                placeholder="e.g., My family, my pets, future goals..."
+                            />
+                        </div>
+                    </div>
+
+                    <div className="safety-plan-actions">
+                         <button type="submit" className="log-button">Save Plan</button>
+                         <button type="button" onClick={handleShare} className="log-button secondary">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3s3-1.34 3-3-1.34-3-3-3z"/></svg>
+                            Share My Plan
+                         </button>
+                         {showConfirmation && <p className="confirmation-message">Plan Saved Successfully!</p>}
+                    </div>
+                </form>
+            </main>
+        </div>
+    );
+};
+
+
+// --- Relapse Prevention Page Component ---
+const RelapsePreventionPage = ({ navigate }) => {
+    const [plan, setPlan] = useState({
+        triggers: [],
+        copingSkills: [],
+        supportNetwork: [],
+        lifestyleChanges: '',
+    });
+    const [showConfirmation, setShowConfirmation] = useState(false);
+    const [userProfile, setUserProfile] = useState(null);
+
+    useEffect(() => {
+        const storedPlan = JSON.parse(localStorage.getItem('relapsePreventionPlan') || '{}');
+        setPlan({
+            triggers: storedPlan.triggers || [],
+            copingSkills: storedPlan.copingSkills || [],
+            supportNetwork: storedPlan.supportNetwork || [],
+            lifestyleChanges: storedPlan.lifestyleChanges || '',
+        });
+        const storedProfile = JSON.parse(localStorage.getItem('userProfile') || null);
+        setUserProfile(storedProfile);
+    }, []);
+
+    const handleSave = (e) => {
+        e.preventDefault();
+        localStorage.setItem('relapsePreventionPlan', JSON.stringify(plan));
+        setShowConfirmation(true);
+        setTimeout(() => setShowConfirmation(false), 3000);
+        window.dispatchEvent(new Event('app:action'));
+    };
+
+    const handleShare = async () => {
+        const planText = `
+My Relapse Prevention Plan (from Your Journey Your Tools):
+
+**1. My Triggers:**
+${plan.triggers.length > 0 ? plan.triggers.map(s => `- ${s}`).join('\n') : 'Not specified'}
+
+**2. Healthy Coping Skills:**
+${plan.copingSkills.length > 0 ? plan.copingSkills.map(s => `- ${s}`).join('\n') : 'Not specified'}
+
+**3. My Support Network:**
+${plan.supportNetwork.length > 0 ? plan.supportNetwork.map(p => `- ${p.name}${p.phone ? ` (${p.phone})` : ''}`).join('\n') : 'Not specified'}
+
+**4. Positive Lifestyle Changes:**
+${plan.lifestyleChanges || 'Not specified'}
+        `.trim().replace(/\n\n\n/g, '\n\n');
+
+        try {
+            if (navigator.share) {
+                await navigator.share({
+                    title: 'My Relapse Prevention Plan',
+                    text: planText,
+                });
+            } else {
+                await navigator.clipboard.writeText(planText);
+                alert('Relapse Prevention Plan copied to clipboard!');
+            }
+        } catch (error) {
+            console.error('Error sharing plan:', error);
+            alert('Could not share or copy the plan.');
+        }
+    };
+
+    const handleTextChange = (e) => {
+        const { name, value } = e.target;
+        setPlan(p => ({ ...p, [name]: value }));
+    };
+
+    const addEmergencyContact = () => {
+        if (userProfile && userProfile.emergencyContactName) {
+            const emergencyContact = {
+                id: Date.now(),
+                name: userProfile.emergencyContactName,
+                phone: userProfile.emergencyContactPhone || ''
+            };
+            // Avoid adding duplicates
+            if (!plan.supportNetwork.some(p => p.name === emergencyContact.name)) {
+                setPlan(p => ({
+                    ...p,
+                    supportNetwork: [...p.supportNetwork, emergencyContact]
+                }));
+            }
+        }
+    };
+
+    return (
+        <div className="page-container" style={{ paddingTop: '1rem' }}>
+            <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" /></svg>
+                </button>
+                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <h1 className="app-title">Relapse Prevention Plan</h1>
+                    <InfoTooltip text="This plan helps you identify personal triggers and high-risk situations for substance use, and prepares you with healthy coping skills and a support network to maintain your recovery." />
+                </div>
+            </header>
+            <main>
+                <form onSubmit={handleSave} className="plan-form-container">
+                    <DynamicListSection
+                        title="1. My Triggers"
+                        description="List people, places, feelings, or situations that make you want to use."
+                        items={plan.triggers}
+                        setItems={(newItems) => setPlan(p => ({ ...p, triggers: newItems }))}
+                        placeholder="e.g., Feeling stressed after work..."
+                    />
+
+                    <DynamicListSection
+                        title="2. Healthy Coping Skills"
+                        description="What can you do instead of using when you encounter a trigger?"
+                        items={plan.copingSkills}
+                        setItems={(newItems) => setPlan(p => ({ ...p, copingSkills: newItems }))}
+                        placeholder="e.g., Call a friend, go for a walk..."
+                    />
+
+                    <DynamicContactListSection
+                        title="3. My Support Network"
+                        description="Who can you call for support when you're struggling?"
+                        contacts={plan.supportNetwork}
+                        setContacts={(newContacts) => setPlan(p => ({ ...p, supportNetwork: newContacts }))}
+                        placeholderName="e.g., Sponsor's Name"
+                        placeholderPhone="e.g., (555) 555-5555"
+                    >
+                        {userProfile?.emergencyContactName && !plan.supportNetwork.some(p => p.name === userProfile.emergencyContactName) && (
+                            <button type="button" onClick={addEmergencyContact} className="add-contact-btn" style={{marginTop: 0}}>
+                                 <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                                Add {userProfile.emergencyContactName} (Emergency Contact)
+                            </button>
+                        )}
+                    </DynamicContactListSection>
+
+                    <div className="plan-form-section">
+                        <div className="plan-section-header">
+                            <h3>4. Positive Lifestyle Changes</h3>
+                            <p>What new routines or activities can support your recovery?</p>
+                        </div>
+                        <div className="form-group">
+                            <textarea
+                                name="lifestyleChanges"
+                                value={plan.lifestyleChanges}
+                                onChange={handleTextChange}
+                                rows={4}
+                                placeholder="e.g., Attend meetings, exercise 3 times a week, start a new hobby..."
+                            />
+                        </div>
+                    </div>
+
+                    <div className="safety-plan-actions">
+                         <button type="submit" className="log-button">Save Plan</button>
+                         <button type="button" onClick={handleShare} className="log-button secondary">
+                            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3s3-1.34 3-3-1.34-3-3-3z"/></svg>
+                            Share My Plan
+                         </button>
+                         {showConfirmation && <p className="confirmation-message">Plan Saved Successfully!</p>}
+                    </div>
+                </form>
+            </main>
+        </div>
+    );
+};
+
+
+// --- Thought Diary Page ---
+const ThoughtDiaryPage = ({ navigate }) => {
+    const STEPS = [
+        { key: 'situation', title: "The Situation", prompt: "Describe the event or situation that triggered the negative thoughts. Be objective and stick to the facts." },
+        { key: 'thoughts', title: "Automatic Thoughts", prompt: "What were the immediate thoughts or images that went through your mind? Don't filter, just write them down." },
+        { key: 'feelings', title: "Feelings & Emotions", prompt: "What emotions did you feel? List them and rate their intensity (e.g., Sad 80%, Anxious 90%)." },
+        { key: 'evidenceFor', title: "Evidence For The Thoughts", prompt: "What facts or evidence support the truthfulness of your automatic thoughts?" },
+        { key: 'evidenceAgainst', title: "Evidence Against The Thoughts", prompt: "What facts or evidence contradict your automatic thoughts? Is there another way to see this?" },
+        { key: 'alternativeThought', title: "Alternative, Balanced Thought", prompt: "Considering the evidence, what is a more balanced and realistic way of looking at this situation?" },
+        { key: 'outcome', title: "Outcome", prompt: "How do you feel now? Re-rate your emotions and note any changes in your perspective." },
+    ];
+
+    const [view, setView] = useState<'list' | 'form'>('list');
+    const [currentStep, setCurrentStep] = useState(0);
+    const [entryData, setEntryData] = useState({
+        situation: '',
+        thoughts: '',
+        feelings: '',
+        evidenceFor: '',
+        evidenceAgainst: '',
+        alternativeThought: '',
+        outcome: '',
+    });
+    const [history, setHistory] = useState<ThoughtDiaryEntry[]>([]);
+    const [showConfirmation, setShowConfirmation] = useState(false);
+
+    useEffect(() => {
+        const storedHistory = JSON.parse(localStorage.getItem('thoughtDiaryHistory') || '[]') as ThoughtDiaryEntry[];
+        setHistory(storedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+    }, []);
+
+    const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        const { name, value } = e.target;
+        setEntryData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleSave = () => {
+        const newEntry: ThoughtDiaryEntry = {
+            date: new Date().toISOString(),
+            data: entryData,
+        };
+        const updatedHistory = [newEntry, ...history];
+        localStorage.setItem('thoughtDiaryHistory', JSON.stringify(updatedHistory));
+        setHistory(updatedHistory);
+        
+        setView('list');
+        setCurrentStep(0);
+        setEntryData({ situation: '', thoughts: '', feelings: '', evidenceFor: '', evidenceAgainst: '', alternativeThought: '', outcome: '' });
+        
+        setShowConfirmation(true);
+        setTimeout(() => setShowConfirmation(false), 3000);
+        window.dispatchEvent(new Event('app:action'));
+    };
+
+    const progress = (currentStep / STEPS.length) * 100;
+
+    if (view === 'form') {
+        const isLastStep = currentStep === STEPS.length;
+        const currentStepData = isLastStep ? null : STEPS[currentStep];
+        const canGoNext = currentStepData ? entryData[currentStepData.key as keyof typeof entryData].trim() !== '' : true;
+
+        return (
+             <div className="page-container" style={{paddingTop: '1rem'}}>
+                <header className="page-header-text" style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                    <button onClick={() => setView('list')} className="back-button" aria-label="Cancel and Go Back">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                    </button>
+                    <h1 className="app-title">New Thought Diary</h1>
+                </header>
+                <main>
+                    <div className="thought-diary-progress-bar-container">
+                        <div className="thought-diary-progress-bar" style={{ width: `${isLastStep ? 100 : progress}%` }}></div>
+                    </div>
+                    
+                    {isLastStep ? (
+                        <div className="card no-hover thought-diary-card">
+                            <h2 className="thought-diary-step-title">Entry Summary</h2>
+                             {STEPS.map(step => (
+                                <div key={step.key} className="thought-diary-summary-item">
+                                    <h4>{step.title}</h4>
+                                    <p>{entryData[step.key as keyof typeof entryData] || 'No response.'}</p>
+                                </div>
                             ))}
                         </div>
                     ) : (
-                        <div className="no-values-prompt">
-                            <p>Link goals to your values for more motivation.</p>
-                            <button type="button" className="prompt-button" onClick={() => onNavigate('values-exercise', { initialStep: 'deck-selection' })}>
-                                Complete the Values Exercise
-                            </button>
+                        <div className="card no-hover thought-diary-card">
+                            <p className="adhd-question-number">Step {currentStep + 1} of {STEPS.length}</p>
+                            <h2 className="thought-diary-step-title">{currentStepData?.title}</h2>
+                            <p className="tracker-description" style={{textAlign: 'left'}}>{currentStepData?.prompt}</p>
+                            <div className="form-group">
+                                <textarea
+                                    name={currentStepData?.key}
+                                    value={entryData[currentStepData?.key as keyof typeof entryData]}
+                                    onChange={handleInputChange}
+                                    rows={6}
+                                    autoFocus
+                                />
+                            </div>
                         </div>
                     )}
-                </div>
-
-                <div className="smart-section-card">
-                     <div className="smart-section-header">
-                        <h3><span className="smart-letter">T</span>ime-bound</h3>
-                        <p>When will you achieve this goal by?</p>
+                    
+                    <div className="thought-diary-navigation">
+                        <button
+                            className="log-button secondary"
+                            onClick={() => setCurrentStep(p => p - 1)}
+                            disabled={currentStep === 0}
+                        >
+                            Previous
+                        </button>
+                        {isLastStep ? (
+                             <button
+                                className="log-button"
+                                onClick={handleSave}
+                            >
+                                Save Entry
+                            </button>
+                        ) : (
+                            <button
+                                className="log-button"
+                                onClick={() => setCurrentStep(p => p + 1)}
+                                disabled={!canGoNext}
+                            >
+                                Next
+                            </button>
+                        )}
                     </div>
-                    <input
-                        type="date"
-                        value={deadline}
-                        onChange={e => setDeadline(e.target.value)}
-                        style={{colorScheme: 'dark'}}
-                        placeholder="dd/mm/yyyy"
-                    />
-                </div>
-                
-                <button type="submit" className="log-button" disabled={isSaveDisabled}>Create Goal</button>
-            </form>
+                </main>
+            </div>
         );
-    };
-
-    const activeGoals = goals.filter(g => !g.completed);
-    const completedGoals = goals.filter(g => g.completed);
-    const goalsToShow = activeTab === 'active' ? activeGoals : completedGoals;
+    }
 
     return (
-        <div className="page-container">
-            {logProgressGoal && (
-                 <div className="confirm-modal-overlay" onClick={() => setLogProgressGoal(null)}>
-                    <div className="confirm-modal-content card" onClick={e => e.stopPropagation()}>
-                        <h3>Log Progress</h3>
-                        <p className="log-progress-goal-title">{logProgressGoal.title}</p>
-                        
-                        <div className="log-progress-form">
-                            <label htmlFor="log-value">How many {logProgressGoal.unit} did you complete?</label>
+        <div className="page-container" style={{paddingTop: '1rem'}}>
+            <header className="page-header-text" style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <h1 className="app-title">Thought Diary</h1>
+                    <InfoTooltip text="Based on Cognitive Behavioral Therapy (CBT), this tool helps you identify, challenge, and reframe negative thought patterns by examining the evidence for and against them." />
+                </div>
+            </header>
+            <main>
+                <div className="card no-hover" style={{textAlign: 'left', gap: '1.5rem', marginBottom: '2rem'}}>
+                     <div className="form-section-title" style={{color: 'var(--accent-teal)'}}>
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-11h2v2h-2v-2zm0 4h2v6h-2v-6z"/></svg>
+                        <h3>Challenge Your Thoughts</h3>
+                    </div>
+                    <p className="tracker-description" style={{textAlign: 'left'}}>
+                        This exercise, based on Cognitive Behavioral Therapy (CBT), helps you identify, challenge, and reframe unhelpful thought patterns. By examining the evidence, you can develop more balanced perspectives.
+                    </p>
+                    <button className="log-button" onClick={() => setView('form')}>Start New Entry</button>
+                </div>
+                {showConfirmation && <p className="confirmation-message">Entry Saved Successfully!</p>}
+
+                <section className="history-section" style={{marginTop: 0}}>
+                    <h3 className="history-title">History</h3>
+                    {history.length > 0 ? (
+                        <ul className="history-list">
+                            {history.map(entry => (
+                                <li key={entry.date} className="history-item">
+                                    <div className="history-details" style={{gap: '0.25rem'}}>
+                                        <strong>{new Date(entry.date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</strong>
+                                        <span style={{color: 'var(--text-muted)', fontStyle: 'italic'}}>{entry.data.situation.substring(0, 50)}...</span>
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p className="no-history-message">No entries yet. Start a new entry to see your history here.</p>
+                    )}
+                </section>
+            </main>
+        </div>
+    );
+};
+
+
+// --- Cravings Page Component ---
+const CravingsPage = ({ navigate }) => {
+    const [intensity, setIntensity] = useState(5);
+    const [entryDateTime, setEntryDateTime] = useState(new Date());
+    const [trigger, setTrigger] = useState('');
+    const [copingMechanism, setCopingMechanism] = useState('');
+    const [history, setHistory] = useState<CravingsHistoryEntry[]>([]);
+    const [showConfirmation, setShowConfirmation] = useState(false);
+
+    useEffect(() => {
+        const storedHistory = JSON.parse(localStorage.getItem('cravingsHistory') || '[]') as CravingsHistoryEntry[];
+        setHistory(storedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+    }, []);
+
+    const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const dateStr = e.target.value; // YYYY-MM-DD
+        if (!dateStr) return;
+        const [year, month, day] = dateStr.split('-').map(Number);
+        if (!year || !month || !day) return;
+        const newDate = new Date(entryDateTime);
+        newDate.setFullYear(year, month - 1, day);
+        setEntryDateTime(newDate);
+    };
+
+    const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const timeStr = e.target.value; // HH:mm
+        if (!timeStr) return;
+        const [hours, minutes] = timeStr.split(':').map(Number);
+        if (isNaN(hours) || isNaN(minutes)) return;
+        const newDate = new Date(entryDateTime);
+        newDate.setHours(hours, minutes);
+        setEntryDateTime(newDate);
+    };
+
+    const toISODateString = (date: Date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+
+    const toISOTimeString = (date: Date) => {
+        const hours = String(date.getHours()).padStart(2, '0');
+        const minutes = String(date.getMinutes()).padStart(2, '0');
+        return `${hours}:${minutes}`;
+    };
+
+    const handleLogEntry = (e: React.FormEvent) => {
+        e.preventDefault();
+        const newEntry: CravingsHistoryEntry = {
+            date: entryDateTime.toISOString(),
+            intensity,
+            trigger,
+            copingMechanism
+        };
+
+        const updatedHistory = [newEntry, ...history].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        localStorage.setItem('cravingsHistory', JSON.stringify(updatedHistory));
+        setHistory(updatedHistory);
+
+        // Reset form
+        setIntensity(5);
+        setEntryDateTime(new Date());
+        setTrigger('');
+        setCopingMechanism('');
+
+        setShowConfirmation(true);
+        setTimeout(() => setShowConfirmation(false), 3000);
+        window.dispatchEvent(new Event('app:action'));
+    };
+
+    const getIntensityColor = (value: number) => {
+        const hue = (1 - (value - 1) / 9) * 120; // 120 (green) to 0 (red)
+        return `hsl(${hue}, 80%, 50%)`;
+    };
+
+    return (
+        <div className="page-container" style={{paddingTop: '1rem'}}>
+            <header className="page-header-text" style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                 <h1 className="app-title">Craving Tracker</h1>
+            </header>
+
+            <main>
+                <form onSubmit={handleLogEntry} className="card tracker-section">
+                    <p className="tracker-description">Log your cravings to understand patterns and manage urges.</p>
+
+                    <div className="form-group">
+                        <label>Craving Intensity: <span className="intensity-value-display" style={{color: getIntensityColor(intensity)}}>{intensity}</span> / 10</label>
+                        <div className="intensity-slider-container">
+                            <span>Mild</span>
                             <input
-                                id="log-value"
-                                type="number"
-                                value={logValue}
-                                onChange={(e) => setLogValue(e.target.value)}
-                                autoFocus
+                                type="range"
+                                min="1"
+                                max="10"
+                                value={intensity}
+                                onChange={(e) => setIntensity(Number(e.target.value))}
+                                className="intensity-slider"
+                                style={{'--intensity-color': getIntensityColor(intensity)} as React.CSSProperties}
+                            />
+                             <span>Intense</span>
+                        </div>
+                    </div>
+                    
+                    <div className="form-group">
+                        <label>Date & Time of Craving</label>
+                        <div className="date-time-inputs">
+                            <input
+                                type="date"
+                                value={toISODateString(entryDateTime)}
+                                onChange={handleDateChange}
+                                required
+                            />
+                            <input
+                                type="time"
+                                value={toISOTimeString(entryDateTime)}
+                                onChange={handleTimeChange}
+                                required
                             />
                         </div>
-                        
-                        <div className="confirm-modal-actions" style={{marginTop: '1.5rem'}}>
-                            <button onClick={() => setLogProgressGoal(null)} className="modal-button cancel">Cancel</button>
-                            <button onClick={handleLogProgress} className="modal-button confirm" style={{backgroundColor: 'var(--accent-teal)'}} disabled={!logValue || parseFloat(logValue) <= 0}>
-                                Save Progress
-                            </button>
+                    </div>
+                    
+                    <div className="form-group">
+                        <label htmlFor="trigger">What triggered this craving? (Optional)</label>
+                        <textarea
+                            id="trigger"
+                            value={trigger}
+                            onChange={(e) => setTrigger(e.target.value)}
+                            placeholder="e.g., Saw an ad, felt stressed..."
+                            rows={3}
+                        />
+                    </div>
+                    
+                    <div className="form-group">
+                        <label htmlFor="copingMechanism">How did you cope? (Optional)</label>
+                        <textarea
+                            id="copingMechanism"
+                            value={copingMechanism}
+                            onChange={(e) => setCopingMechanism(e.target.value)}
+                            placeholder="e.g., Went for a walk, called a friend..."
+                            rows={3}
+                        />
+                    </div>
+
+                    <button type="submit" className="log-button" style={{marginTop: '1rem'}}>Log Craving</button>
+                    {showConfirmation && <p className="confirmation-message">Craving Logged Successfully!</p>}
+                </form>
+
+                <section className="history-section">
+                    <hr className="history-divider" />
+                    <h3 className="history-title">History</h3>
+                    {history.length > 0 ? (
+                        <ul className="history-list">
+                            {history.slice(0, 10).map(entry => {
+                                const entryDate = new Date(entry.date);
+                                const formattedDate = entryDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                const formattedTime = entryDate.toLocaleTimeString('en-US', { timeStyle: 'short' });
+
+                                return (
+                                    <li key={entry.date} className="history-item craving-history-item">
+                                        <div className="craving-intensity-indicator" style={{backgroundColor: getIntensityColor(entry.intensity)}}>
+                                            <span>{entry.intensity}</span>
+                                        </div>
+                                        <div className="history-details">
+                                            <span><strong>{formattedDate}</strong> at {formattedTime}</span>
+                                            {entry.trigger && <span className="craving-detail-text"><strong>Trigger:</strong> {entry.trigger}</span>}
+                                            {entry.copingMechanism && <span className="craving-detail-text"><strong>Coped by:</strong> {entry.copingMechanism}</span>}
+                                        </div>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    ) : (
+                        <p className="no-history-message">Your craving history will appear here.</p>
+                    )}
+                </section>
+            </main>
+        </div>
+    );
+};
+
+
+// --- Breathing Page Component ---
+const BreathingPage = ({ navigate }) => {
+    const [isBreathing, setIsBreathing] = useState(false);
+    const [phase, setPhase] = useState<'idle' | 'inhale' | 'hold-in' | 'exhale' | 'hold-out'>('idle');
+    const [count, setCount] = useState(4);
+    const [history, setHistory] = useState<{ date: string }[]>([]);
+
+    useEffect(() => {
+        const storedHistory = JSON.parse(localStorage.getItem('breathingHistory') || '[]');
+        setHistory(storedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+    }, []);
+
+    useEffect(() => {
+        if (!isBreathing) return;
+
+        const phaseDuration = 4;
+
+        const timer = setInterval(() => {
+            setCount(prevCount => {
+                if (prevCount > 1) {
+                    return prevCount - 1;
+                } else {
+                    setPhase(prevPhase => {
+                        switch (prevPhase) {
+                            case 'inhale': return 'hold-in';
+                            case 'hold-in': return 'exhale';
+                            case 'exhale': return 'hold-out';
+                            case 'hold-out': return 'inhale';
+                            default: return 'inhale';
+                        }
+                    });
+                    return phaseDuration;
+                }
+            });
+        }, 1000);
+
+        // Cleanup function
+        return () => clearInterval(timer);
+    }, [isBreathing]);
+
+    const handleStart = () => {
+        setPhase('inhale');
+        setCount(4);
+        setIsBreathing(true);
+    };
+
+    const handleStop = () => {
+        setIsBreathing(false);
+        setPhase('idle');
+        setCount(4);
+        
+        const newEntry = { date: new Date().toISOString() };
+        const updatedHistory = [newEntry, ...history];
+        localStorage.setItem('breathingHistory', JSON.stringify(updatedHistory));
+        setHistory(updatedHistory);
+        window.dispatchEvent(new Event('app:action'));
+    };
+    
+    const phaseInstructions = {
+        idle: "Ready to Start?",
+        inhale: "Inhale...",
+        'hold-in': "Hold",
+        exhale: "Exhale...",
+        'hold-out': "Hold"
+    };
+    
+    const isSessionActive = isBreathing;
+
+    return (
+        <div className="page-container" style={{paddingTop: '1rem'}}>
+            <header className="page-header-text" style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                     <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                 <h1 className="app-title">Breathing Exercise</h1>
+            </header>
+            <main>
+                <div className="card no-hover breathing-card">
+                    <p className="tracker-description">Follow the guide to calm your mind. This is a 4-4-4-4 box breathing exercise.</p>
+                    <div className="breathing-anim-container">
+                        <div className={`breathing-circle ${isSessionActive ? phase : 'idle'}`}>
+                            <div className="breathing-text-content">
+                                <p className="breathing-instruction">{phaseInstructions[phase]}</p>
+                                {isSessionActive && <p className="breathing-counter">{count}</p>}
+                            </div>
                         </div>
+                    </div>
+                    
+                    {isSessionActive ? (
+                        <button onClick={handleStop} className="log-button stop-breathing-button">Stop Session</button>
+                    ) : (
+                        <button onClick={handleStart} className="log-button">Start Breathing</button>
+                    )}
+                </div>
+                
+                 <section className="history-section">
+                    <hr className="history-divider" />
+                    <h3 className="history-title">History</h3>
+                    {history.length > 0 ? (
+                        <ul className="history-list">
+                            {history.slice(0, 5).map((entry, index) => (
+                                <li key={index} className="history-item">
+                                    <div className="history-details" style={{flexGrow: 1}}>
+                                        <span>Completed Session</span>
+                                        <span style={{color: 'var(--text-muted)'}}>{new Date(entry.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })} at {new Date(entry.date).toLocaleTimeString('en-US', { timeStyle: 'short' })}</span>
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p className="no-history-message">You haven't completed any breathing exercises yet.</p>
+                    )}
+                </section>
+            </main>
+        </div>
+    );
+};
+// --- Grounding Page Component ---
+const GroundingPage = ({ navigate }) => {
+    const STEPS = [
+        { number: 5, sense: 'see', instruction: 'Acknowledge 5 things you can see around you.' },
+        { number: 4, sense: 'feel', instruction: 'Become aware of 4 things you can feel.' },
+        { number: 3, sense: 'hear', instruction: 'Listen for 3 things you can hear.' },
+        { number: 2, sense: 'smell', instruction: 'Notice 2 things you can smell.' },
+        { number: 1, sense: 'taste', instruction: 'Acknowledge 1 thing you can taste.' },
+    ];
+
+    const [view, setView] = useState<'intro' | 'exercise'>('intro');
+    const [currentStep, setCurrentStep] = useState(0);
+    const [history, setHistory] = useState<{ date: string }[]>([]);
+    const [showConfirmation, setShowConfirmation] = useState(false);
+
+    useEffect(() => {
+        const storedHistory = JSON.parse(localStorage.getItem('groundingHistory') || '[]');
+        setHistory(storedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+    }, []);
+
+    const handleStart = () => {
+        setView('exercise');
+        setCurrentStep(0);
+        setShowConfirmation(false);
+    };
+
+    const handleFinish = () => {
+        const newEntry = { date: new Date().toISOString() };
+        const updatedHistory = [newEntry, ...history];
+        localStorage.setItem('groundingHistory', JSON.stringify(updatedHistory));
+        setHistory(updatedHistory);
+        window.dispatchEvent(new Event('app:action'));
+
+        setView('intro');
+        setShowConfirmation(true);
+        setTimeout(() => setShowConfirmation(false), 4000);
+    };
+
+    const renderContent = () => {
+        if (view === 'intro') {
+            return (
+                <div className="card no-hover" style={{ textAlign: 'left', gap: '1.5rem', marginBottom: '2rem' }}>
+                    <div className="form-section-title" style={{ color: 'var(--accent-teal)' }}>
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M5 15.5c0 2.54 1.63 4.78 3.93 5.61.4.15.87.15 1.27 0C12.5 20.28 14.13 18.04 14.13 15.5V11H5v4.5zM19 11h-3.13c0-2.54-1.63-4.78-3.93-5.61-.4-.15-.87-.15-1.27 0C8.5 6.22 6.87 8.46 6.87 11H3c0-4.99 4.02-9 9-9s9 4.01 9 9z"/></svg>
+                        <h3>Ground Yourself</h3>
+                    </div>
+                    <p className="tracker-description" style={{ textAlign: 'left' }}>
+                        The 5-4-3-2-1 technique is a simple yet powerful grounding exercise to bring you back to the present moment. It helps manage anxiety by directing your focus to your senses.
+                    </p>
+                    <button className="log-button" onClick={handleStart}>Start Exercise</button>
+                    {showConfirmation && <p className="confirmation-message">Well done! You've completed the exercise.</p>}
+                </div>
+            );
+        }
+
+        if (view === 'exercise') {
+            const step = STEPS[currentStep];
+            return (
+                <div className="card no-hover grounding-exercise-card">
+                    <div className="grounding-step-content">
+                        <div className="grounding-number">{step.number}</div>
+                        <p className="grounding-instruction" dangerouslySetInnerHTML={{ __html: step.instruction.replace(String(step.number), `<strong>${step.number}</strong>`).replace(step.sense, `<strong>${step.sense}</strong>`) }} />
+                    </div>
+                    <div className="grounding-navigation">
+                        <button
+                            className="log-button secondary"
+                            onClick={() => setCurrentStep(p => p - 1)}
+                            disabled={currentStep === 0}
+                        >
+                            Previous
+                        </button>
+                        {currentStep < STEPS.length - 1 ? (
+                            <button
+                                className="log-button"
+                                onClick={() => setCurrentStep(p => p + 1)}
+                            >
+                                Next
+                            </button>
+                        ) : (
+                            <button
+                                className="log-button"
+                                onClick={handleFinish}
+                            >
+                                Finish Session
+                            </button>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        return null;
+    };
+
+
+    return (
+        <div className="page-container" style={{ paddingTop: '1rem' }}>
+            <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" /></svg>
+                </button>
+                <h1 className="app-title">5-4-3-2-1 Grounding</h1>
+            </header>
+            <main>
+                {renderContent()}
+
+                <section className="history-section" style={{ marginTop: '0' }}>
+                    <hr className="history-divider" />
+                    <h3 className="history-title">History</h3>
+                    {history.length > 0 ? (
+                        <ul className="history-list">
+                            {history.slice(0, 5).map((entry, index) => (
+                                <li key={index} className="history-item">
+                                    <div className="history-details" style={{ flexGrow: 1 }}>
+                                        <span>Completed Session</span>
+                                        <span style={{ color: 'var(--text-muted)' }}>{new Date(entry.date).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })} at {new Date(entry.date).toLocaleTimeString('en-US', { timeStyle: 'short' })}</span>
+                                    </div>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <p className="no-history-message">You haven't completed any grounding exercises yet.</p>
+                    )}
+                </section>
+            </main>
+        </div>
+    );
+};
+const ValuesExercisePage = ({ navigate }) => {
+    const CORE_VALUES = useMemo(() => [
+        "Accomplishment", "Accountability", "Adventure", "Altruism", "Authenticity",
+        "Autonomy", "Balance", "Belonging", "Calmness", "Challenge", "Collaboration",
+        "Commitment", "Community", "Compassion", "Competence", "Contribution", "Courage",
+        "Creativity", "Curiosity", "Determination", "Empathy", "Fairness", "Family",
+        "Flexibility", "Forgiveness", "Freedom", "Friendship", "Fun", "Generosity",
+        "Growth", "Harmony", "Health", "Honesty", "Humor", "Independence", "Integrity",
+        "Kindness", "Knowledge", "Leadership", "Learning", "Love", "Loyalty", "Mindfulness",
+        "Openness", "Optimism", "Passion", "Peace", "Perseverance", "Respect", "Responsibility", "Security"
+    ], []);
+
+    const [view, setView] = useState<'intro' | 'round1' | 'round2' | 'round3' | 'results'>('intro');
+    const [deck, setDeck] = useState<string[]>([]);
+    const [kept, setKept] = useState<string[]>([]);
+    const [discarded, setDiscarded] = useState<string[]>([]);
+    const [top10, setTop10] = useState<string[]>([]);
+    const [top5, setTop5] = useState<string[]>([]);
+    const [finalValues, setFinalValues] = useState<string[]>([]);
+    const [history, setHistory] = useState<ValuesHistoryEntry[]>([]);
+    const [showDiscarded, setShowDiscarded] = useState(false);
+    const [cardState, setCardState] = useState<'in' | 'out-left' | 'out-right'>('in');
+
+    useEffect(() => {
+        const storedHistory = JSON.parse(localStorage.getItem('valuesHistory') || '[]') as ValuesHistoryEntry[];
+        setHistory(storedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
+    }, []);
+
+    const shuffleArray = (array: string[]) => {
+        let currentIndex = array.length, randomIndex;
+        while (currentIndex !== 0) {
+            randomIndex = Math.floor(Math.random() * currentIndex);
+            currentIndex--;
+            [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+        }
+        return array;
+    };
+
+    const handleStart = () => {
+        setDeck(shuffleArray([...CORE_VALUES]));
+        setKept([]);
+        setDiscarded([]);
+        setTop10([]);
+        setTop5([]);
+        setView('round1');
+    };
+
+    const handleDecision = (decision: 'keep' | 'discard') => {
+        if (deck.length === 0) return;
+        setCardState(decision === 'keep' ? 'out-right' : 'out-left');
+
+        setTimeout(() => {
+            const currentCard = deck[0];
+            const newDeck = deck.slice(1);
+
+            if (decision === 'keep') {
+                setKept(prev => [...prev, currentCard]);
+            } else {
+                setDiscarded(prev => [...prev, currentCard]);
+            }
+
+            if (newDeck.length === 0) {
+                setView('round2');
+            } else {
+                setDeck(newDeck);
+                setCardState('in');
+            }
+        }, 300);
+    };
+
+    const handleRestoreValue = (value: string) => {
+        setDiscarded(prev => prev.filter(v => v !== value));
+        setKept(prev => [...prev, value]);
+    };
+
+    const handleSelectTop10 = (value: string) => {
+        setTop10(prev => {
+            if (prev.includes(value)) {
+                return prev.filter(v => v !== value);
+            }
+            if (prev.length < 10) {
+                return [...prev, value];
+            }
+            return prev;
+        });
+    };
+    
+    const handleSelectTop5 = (value: string) => {
+        setTop5(prev => {
+            if (prev.includes(value)) {
+                return prev.filter(v => v !== value);
+            }
+            if (prev.length < 5) {
+                return [...prev, value];
+            }
+            return prev;
+        });
+    };
+
+    const handleFinish = () => {
+        setFinalValues(top5);
+        const newEntry: ValuesHistoryEntry = { date: new Date().toISOString(), top5: top5 };
+        const updatedHistory = [newEntry, ...history];
+        localStorage.setItem('valuesHistory', JSON.stringify(updatedHistory));
+        setHistory(updatedHistory);
+        window.dispatchEvent(new Event('app:action'));
+        setView('results');
+    };
+    
+    const renderIntro = () => (
+        <>
+            <div className="card no-hover" style={{ textAlign: 'left', gap: '1.5rem', marginBottom: '2rem' }}>
+                <div className="form-section-title" style={{ color: 'var(--accent-teal)' }}>
+                    <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2L2 8.5l10 13.5L22 8.5L12 2zm0 2.31l7.5 5.19L12 18.31L4.5 9.5L12 4.31z"/></svg>
+                    <h3>Discover Your Core Values</h3>
+                </div>
+                <p className="tracker-description" style={{ textAlign: 'left' }}>
+                    This exercise helps you understand what's most important to you. By identifying your core values, you can make decisions and set goals that align with your authentic self.
+                </p>
+                <button className="log-button" onClick={handleStart}>Start Exercise</button>
+            </div>
+            <section className="history-section" style={{ marginTop: '0' }}>
+                <h3 className="history-title">History</h3>
+                {history.length > 0 ? (
+                    <ul className="history-list">
+                        {history.slice(0, 5).map(entry => (
+                            <li key={entry.date} className="history-item">
+                                <div className="history-details">
+                                    <strong>{new Date(entry.date).toLocaleDateString()}</strong>
+                                    <span>{entry.top5.join(', ')}</span>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                ) : <p className="no-history-message">You haven't completed this exercise yet.</p>}
+            </section>
+        </>
+    );
+
+    const renderRound1 = () => (
+        <>
+            <div className="values-progress-bar-container">
+                <div className="values-progress-bar" style={{ width: `${((CORE_VALUES.length - deck.length) / CORE_VALUES.length) * 100}%` }}></div>
+            </div>
+            <p className="values-progress-text">{CORE_VALUES.length - deck.length + 1} / {CORE_VALUES.length}</p>
+            <div className="value-card-container">
+                <div className={`card value-card ${cardState}`}>
+                    <h3>{deck[0]}</h3>
+                </div>
+            </div>
+            <div className="value-card-actions">
+                <button className="value-discard-btn" onClick={() => handleDecision('discard')}>Discard</button>
+                <button className="value-keep-btn" onClick={() => handleDecision('keep')}>Keep</button>
+            </div>
+             <button className="link-button" onClick={() => setShowDiscarded(true)}>
+                View Discarded ({discarded.length})
+            </button>
+        </>
+    );
+    
+    const renderSelectionRound = (title: string, values: string[], selected: string[], onSelect: (v: string) => void, limit: number, onNext: () => void, nextLabel: string) => (
+        <div className="card no-hover" style={{gap: '1.5rem', alignItems: 'stretch'}}>
+            <h2 className="values-selection-title">{title}</h2>
+            <p className="tracker-description" style={{textAlign: 'center'}}>You have selected {selected.length} / {limit}</p>
+            <div className="values-selection-grid">
+                {values.sort().map(value => (
+                    <button key={value} className={`value-chip ${selected.includes(value) ? 'selected' : ''}`} onClick={() => onSelect(value)}>
+                        {value}
+                    </button>
+                ))}
+            </div>
+             <button className="log-button" disabled={selected.length !== limit} onClick={onNext} style={{marginTop: '1rem'}}>{nextLabel}</button>
+        </div>
+    );
+    
+    const renderResults = () => (
+        <div className="card no-hover" style={{gap: '1.5rem', alignItems: 'stretch', textAlign: 'center'}}>
+            <h2 className="values-selection-title">Your Top 5 Core Values</h2>
+            <ul className="values-results-list">
+                {finalValues.map(value => <li key={value}>{value}</li>)}
+            </ul>
+             <p className="tracker-description">These values represent your guiding principles. Reflect on how you can live by them more fully in your daily life.</p>
+            <button className="log-button" onClick={() => setView('intro')} style={{marginTop: '1rem'}}>Done</button>
+        </div>
+    );
+
+    return (
+        <div className="page-container" style={{ paddingTop: '1rem' }}>
+            <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" /></svg>
+                </button>
+                <h1 className="app-title">Core Values</h1>
+            </header>
+            <main className="values-exercise-page">
+                {view === 'intro' && renderIntro()}
+                {view === 'round1' && deck.length > 0 && renderRound1()}
+                {view === 'round2' && renderSelectionRound('Select Your Top 10', kept, top10, handleSelectTop10, 10, () => setView('round3'), 'Continue')}
+                {view === 'round3' && renderSelectionRound('Select Your Top 5', top10, top5, handleSelectTop5, 5, handleFinish, 'Finish')}
+                {view === 'results' && renderResults()}
+            </main>
+             {showDiscarded && (
+                <div className="discarded-modal-overlay" onClick={() => setShowDiscarded(false)}>
+                    <div className="card discarded-modal-content" onClick={e => e.stopPropagation()}>
+                        <h2>Discarded Values</h2>
+                        <div className="values-selection-grid">
+                            {discarded.length > 0 ? discarded.sort().map(value => (
+                                <button key={value} className="value-chip" onClick={() => handleRestoreValue(value)}>
+                                    {value}
+                                </button>
+                            )) : <p>No discarded values yet.</p>}
+                        </div>
+                         <button className="log-button" onClick={() => setShowDiscarded(false)} style={{marginTop: '1.5rem'}}>Close</button>
                     </div>
                 </div>
             )}
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={view === 'create' ? () => setView('dashboard') : onBack} className="home-button" aria-label="Go back">
-                         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                         <span>{view === 'create' ? 'Back to Goals' : 'Back'}</span>
-                    </button>
-                </div>
-                <main className="goals-dashboard">
-                    <div className="page-header-text">
-                        <h1 className="app-title">{view === 'create' ? 'Set a SMART Goal' : 'Your Goals'}</h1>
-                        <p className="app-subtitle">{view === 'create' ? 'Fill out the sections below to create a new goal.' : 'Track your progress and celebrate your achievements.'}</p>
-                    </div>
-
-                    {view === 'dashboard' && (
-                        <>
-                            <button className="create-goal-button" onClick={() => setView('create')}>
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                                <span>Set a New Goal</span>
-                            </button>
-
-                            <div className="goals-tabs">
-                                <button className={`goals-tab-button ${activeTab === 'active' ? 'active' : ''}`} onClick={() => setActiveTab('active')}>
-                                    Active ({activeGoals.length})
-                                </button>
-                                <button className={`goals-tab-button ${activeTab === 'completed' ? 'active' : ''}`} onClick={() => setActiveTab('completed')}>
-                                    Completed ({completedGoals.length})
-                                </button>
-                            </div>
-
-                            {goalsToShow.length > 0 ? (
-                                <div className="goals-grid">
-                                    {goalsToShow.map(goal => {
-                                        const progress = Math.min((goal.currentValue / goal.targetValue) * 100, 100);
-                                        return (
-                                            <div key={goal.id} className={`card goal-card ${goal.completed ? 'completed' : ''}`}>
-                                                <h3 className="goal-title">{goal.title}</h3>
-                                                <div className="goal-progress-bar-container">
-                                                    <div className="goal-progress-bar" style={{ width: `${progress}%` }}></div>
-                                                </div>
-                                                <div className="goal-metrics">
-                                                    <span className="progress-text">{progress.toFixed(0)}% Complete</span>
-                                                    <span className="progress-numbers">{goal.currentValue.toFixed(1)} / {goal.targetValue.toFixed(1)} {goal.unit}</span>
-                                                </div>
-                                                <div className="goal-meta">
-                                                    {goal.linkedValue && (
-                                                        <span className="goal-linked-value">
-                                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-                                                            {goal.linkedValue}
-                                                        </span>
-                                                    )}
-                                                    <span>{goal.deadline ? `Due: ${new Date(goal.deadline).toLocaleDateString()}` : ''}</span>
-                                                </div>
-                                                {!goal.completed ? (
-                                                    <div className="goal-actions">
-                                                        <button className="goal-action-button log" onClick={() => setLogProgressGoal(goal)}>Log Progress</button>
-                                                        <button className="goal-action-button complete" onClick={() => handleCompleteGoal(goal.id)}>Mark Complete</button>
-                                                    </div>
-                                                ) : (
-                                                    <div className="goal-completed-badge">
-                                                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
-                                                        <span>Completed on {new Date(goal.completedAt).toLocaleDateString()}</span>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )
-                                    })}
-                                </div>
-                            ) : (
-                                <div className="no-data-placeholder" style={{padding: '3rem 1rem'}}>
-                                    <p>No {activeTab} goals yet. Let's set one up!</p>
-                                </div>
-                            )}
-                        </>
-                    )}
-                    
-                    {view === 'create' && <CreateGoalForm onSave={handleCreateGoal} onNavigate={onNavigate} />}
-
-                </main>
-            </div>
         </div>
     );
 };
 
-// --- Sobriety Clock Component ---
-const SobrietyClock = ({ size = 'large', onNavigate }) => {
-    // Lazily initialize startTime from localStorage to avoid re-reading on every render.
-    const [startTime] = useState(() => {
-        try {
-            const storedHistory = localStorage.getItem('journalHistory');
-            const history = storedHistory ? JSON.parse(storedHistory) : [];
-            return history.length > 0 && history[0].entryTimestamp ? history[0].entryTimestamp : null;
-        } catch (e) {
-            console.error("Failed to parse journal history for sobriety clock", e);
-            return null;
-        }
+const GoalsPage = ({ navigate }) => {
+    const [isCreatorOpen, setIsCreatorOpen] = useState(false);
+    const [goals, setGoals] = useState<GoalEntry[]>([]);
+    const [coreValues, setCoreValues] = useState<string[]>([]);
+    const [newGoal, setNewGoal] = useState({
+        title: '',
+        measurable: '',
+        achievable: '',
+        relevant: '',
+        relevantValues: [] as string[],
+        targetDate: '',
     });
-
-    // A single function to calculate the time display properties.
-    const calculateTimeDisplay = (fromTime) => {
-        if (!fromTime) return { value: 0, unit: 'Seconds' };
-
-        const now = Date.now();
-        const diff = now - fromTime;
-
-        if (diff < 0) return { value: 0, unit: 'Seconds' };
-
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-        const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-
-        if (days > 0) return { value: days, unit: days === 1 ? 'Day' : 'Days' };
-        if (hours > 0) return { value: hours, unit: hours === 1 ? 'Hour' : 'Hours' };
-        if (minutes > 0) return { value: minutes, unit: minutes === 1 ? 'Minute' : 'Minutes' };
-        return { value: seconds, unit: seconds === 1 ? 'Second' : 'Seconds' };
-    };
     
-    // Initialize the display state with the correct values from the start, preventing the flicker.
-    const [displayValue, setDisplayValue] = useState(() => calculateTimeDisplay(startTime).value);
-    const [displayUnit, setDisplayUnit] = useState(() => calculateTimeDisplay(startTime).unit);
-
     useEffect(() => {
-        if (startTime) {
-            // Set up an interval to update the clock every second.
-            const interval = setInterval(() => {
-                const { value, unit } = calculateTimeDisplay(startTime);
-                setDisplayValue(value);
-                setDisplayUnit(unit);
-            }, 1000);
-
-            // Clean up the interval when the component unmounts.
-            return () => clearInterval(interval);
+        const storedGoals = JSON.parse(localStorage.getItem('goals') || '[]') as GoalEntry[];
+        setGoals(storedGoals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+        
+        const valuesHistory = JSON.parse(localStorage.getItem('valuesHistory') || '[]') as ValuesHistoryEntry[];
+        if (valuesHistory.length > 0) {
+            setCoreValues(valuesHistory[0].top5);
         }
-    }, [startTime]); // The effect depends only on startTime.
-
-    if (startTime === null) {
-        return (
-            <div className="card sobriety-clock-card-placeholder">
-                <h2 className="card-title">Sobriety Clock</h2>
-                <p className="card-description">Make your first journal entry to start the clock.</p>
-            </div>
-        );
-    }
-    
-    return (
-        <div className="card sobriety-clock-card no-hover">
-             <h2 className="sobriety-clock-title">You have been sober for</h2>
-             <div className="sobriety-time-box">
-                <span className="sobriety-time-value">{displayValue}</span>
-                <span className="sobriety-time-unit">{displayUnit}</span>
-             </div>
-        </div>
-    );
-};
-
-// --- History Page Component ---
-const HistoryPage = ({ onBack }) => {
-    const [combinedHistory, setCombinedHistory] = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
-
-    useEffect(() => {
-        const fetchAllHistory = () => {
-            let allItems = [];
-
-            const sources = [
-                { key: 'journalHistory', parser: (item) => ({ id: `journal-${item.id}`, type: 'journal', timestamp: item.entryTimestamp || new Date(item.date).getTime(), data: item }) },
-                { key: 'cravingsHistory', parser: (item) => ({ id: `craving-${item.id}`, type: 'craving', timestamp: new Date(item.date).getTime(), data: item }) },
-                { key: 'goals', parser: (item) => item.completed ? ({ id: `goal-${item.id}`, type: 'goal', timestamp: new Date(item.completedAt).getTime(), data: item }) : null },
-                { key: 'groundingHistory', parser: (item, index) => ({ id: `grounding-${new Date(item.date).getTime()}-${index}`, type: 'grounding', timestamp: new Date(item.date).getTime(), data: item }) },
-                { key: 'threeGoodThingsHistory', parser: (item) => ({ id: `good-things-${item.id}`, type: 'good-things', timestamp: new Date(item.date).getTime(), data: item }) },
-                { key: 'thoughtTriangleHistory', parser: (item) => ({ id: `thought-triangle-${item.id}`, type: 'thought-triangle', timestamp: new Date(item.date).getTime(), data: item }) },
-                { key: 'auditHistory', parser: (item) => ({ id: `audit-${new Date(item.date).getTime()}`, type: 'audit', timestamp: new Date(item.date).getTime(), data: item }) },
-            ];
-
-            sources.forEach(source => {
-                try {
-                    const data = JSON.parse(localStorage.getItem(source.key) || '[]');
-                    const items = data.map(source.parser).filter(Boolean);
-                    allItems.push(...items);
-                } catch (e) {
-                    console.error(`Error parsing history for ${source.key}`, e);
-                }
-            });
-
-            allItems.sort((a, b) => b.timestamp - a.timestamp);
-            setCombinedHistory(allItems);
-            setIsLoading(false);
-        };
-
-        fetchAllHistory();
     }, []);
 
-    const HistoryItemCard = ({ item }) => {
-        const { type, data, timestamp } = item;
-        const date = new Date(timestamp);
-        
-        const formatTime12Hour = (time24) => {
-            if (!time24) return '';
-            const [hours, minutes] = time24.split(':');
-            const h = parseInt(hours, 10);
-            const ampm = h >= 12 ? 'PM' : 'AM';
-            const h12 = h % 12 || 12;
-            return ` at ${h12}:${minutes} ${ampm}`;
-        };
-
-        const headers = {
-            journal: { title: 'Journal Entry', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> },
-            craving: { title: 'Craving Logged', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h3v8H3zM8 8h3v12H8zM13 4h3v16h-3zM18 16h3v4h-3z"/></svg> },
-            goal: { title: 'Goal Completed', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg> },
-            grounding: { title: 'Grounding Exercise', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 16.5a5 5 0 1 0 7 0"/><path d="M12 22a5 5 0 0 0 5-5c0-1.42-.64-2.7-1.69-3.58"/><path d="M12 22a5 5 0 0 1-5-5c0-1.42.64-2.7 1.69-3.58"/><path d="M12 12a5 5 0 0 0 5-5c0-1.42-.64-2.7-1.69-3.58"/><path d="M12 12a5 5 0 0 1-5-5c0-1.42.64-2.7 1.69-3.58"/><path d="M2 13.29a5 5 0 0 0 1.69 3.58"/><path d="M22 13.29a5 5 0 0 1-1.69 3.58"/><path d="M12 2a5 5 0 0 0-1.69 3.58"/><path d="M12 2a5 5 0 0 1 1.69 3.58"/></svg> },
-            'good-things': { title: 'Three Good Things', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg> },
-            'thought-triangle': { title: 'Thought Triangle', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 21h20L12 2z"></path></svg> },
-            audit: { title: 'AUDIT Screen', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg> },
-        };
-
-        const renderBody = () => {
-            switch (type) {
-                case 'journal':
-                    const displayAmount = `${data.amountValue} ${data.amountUnit || ''}`;
-                    return <p>Felt <strong>{data.feeling}</strong> and logged {displayAmount.trim()} of {data.substance}.</p>;
-                case 'craving':
-                    return <>
-                        <p><strong>Substance:</strong> {data.substance} (Intensity: {data.intensity}/10)</p>
-                        <p><strong>Coping:</strong> {data.copingMechanism}</p>
-                    </>;
-                case 'goal':
-                    return <p>You achieved your goal: <strong>{data.title}</strong>. Well done!</p>;
-                case 'grounding':
-                    return <p>Completed the <strong>{data.technique}</strong> exercise.</p>;
-                case 'good-things':
-                    return <ul className="history-good-things-list">
-                        {data.things.map((t, i) => <li key={i}>{t.what}</li>)}
-                    </ul>;
-                case 'thought-triangle':
-                    return <p><strong>Situation:</strong> {data.situation}</p>;
-                case 'audit':
-                    return <p>Completed the AUDIT with a score of <strong>{data.score} ({data.interpretation.level})</strong>.</p>;
-                default:
-                    return null;
-            }
-        };
-
-        const { title, icon } = headers[type];
-        
-        return (
-            <div className="card history-card">
-                <div className={`history-card-header type-${type}`}>
-                    <div className="history-card-header-icon">{icon}</div>
-                    <div className="history-card-header-text">
-                        <h3>{title}</h3>
-                        <span>{date.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                    </div>
-                </div>
-                <div className="history-card-body">
-                    {renderBody()}
-                </div>
-            </div>
-        );
+    const updateGoals = (updatedGoals: GoalEntry[]) => {
+        const sortedGoals = updatedGoals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        setGoals(sortedGoals);
+        localStorage.setItem('goals', JSON.stringify(sortedGoals));
+        window.dispatchEvent(new Event('app:action'));
     };
 
-    if (isLoading) {
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        const { name, value } = e.target;
+        setNewGoal(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleValueSelect = (value: string) => {
+        setNewGoal(prev => {
+            const newValues = prev.relevantValues.includes(value)
+                ? prev.relevantValues.filter(v => v !== value)
+                : [...prev.relevantValues, value];
+            return { ...prev, relevantValues: newValues };
+        });
+    };
+    
+    const resetCreator = () => {
+        setIsCreatorOpen(false);
+        setNewGoal({
+            title: '',
+            measurable: '',
+            achievable: '',
+            relevant: '',
+            relevantValues: [],
+            targetDate: '',
+        });
+    }
+
+    const handleSaveGoal = (e: React.FormEvent) => {
+        e.preventDefault();
+        const goalToAdd: GoalEntry = {
+            ...newGoal,
+            id: `goal_${Date.now()}`,
+            status: 'active',
+            createdAt: new Date().toISOString(),
+        };
+        updateGoals([...goals, goalToAdd]);
+        resetCreator();
+    };
+
+    const handleToggleComplete = (goalId: string) => {
+        const updatedGoals = goals.map((goal): GoalEntry =>
+            goal.id === goalId ? { ...goal, status: goal.status === 'active' ? 'completed' : 'active' } : goal
+        );
+        updateGoals(updatedGoals);
+    };
+
+    const handleDeleteGoal = (e: React.MouseEvent, goalId: string) => {
+        e.stopPropagation(); // Prevent navigation/expansion
+        if (window.confirm('Are you sure you want to delete this goal?')) {
+            updateGoals(goals.filter(goal => goal.id !== goalId));
+        }
+    };
+
+    const activeGoals = goals.filter(g => g.status === 'active');
+    const completedGoals = goals.filter(g => g.status === 'completed');
+
+    return (
+        <div className="page-container" style={{ paddingTop: '1rem' }}>
+            <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" /></svg>
+                </button>
+                <h1 className="app-title">My Goals</h1>
+            </header>
+            <main className="goals-page-main">
+                <div className="card no-hover goals-intro-card">
+                    <div className="form-section-title">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                        <h3>Set S.M.A.R.T. Goals</h3>
+                    </div>
+                    <p className="tracker-description" style={{ textAlign: 'left' }}>
+                        Use the S.M.A.R.T. framework (Specific, Measurable, Achievable, Relevant, Time-bound) to set clear and attainable goals that guide your journey.
+                    </p>
+                    <button className="log-button" onClick={() => setIsCreatorOpen(true)}>Create New Goal</button>
+                </div>
+
+                <section className="goals-list-section">
+                    <h3>Active Goals</h3>
+                    {activeGoals.length > 0 ? (
+                        <ul className="goals-list">
+                            {activeGoals.map(goal => (
+                                <li key={goal.id} className={`goal-item ${goal.status}`}>
+                                    <button className="goal-item-toggle" onClick={() => handleToggleComplete(goal.id)} aria-label="Toggle goal completion">
+                                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                                    </button>
+                                    <div className="goal-item-content">
+                                        <p className="goal-item-title">{goal.title}</p>
+                                        <p className="goal-item-date">Target: {new Date(goal.targetDate).toLocaleDateString()}</p>
+                                    </div>
+                                    <button className="goal-item-delete" onClick={(e) => handleDeleteGoal(e, goal.id)} aria-label="Delete goal">
+                                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <div className="no-goals-message">No active goals. Ready to set one?</div>
+                    )}
+                </section>
+                
+                <section className="goals-list-section">
+                    <h3>Completed Goals</h3>
+                     {completedGoals.length > 0 ? (
+                        <ul className="goals-list">
+                            {completedGoals.map(goal => (
+                                <li key={goal.id} className={`goal-item ${goal.status}`}>
+                                    <button className="goal-item-toggle" onClick={() => handleToggleComplete(goal.id)} aria-label="Toggle goal completion">
+                                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                                    </button>
+                                    <div className="goal-item-content">
+                                        <p className="goal-item-title">{goal.title}</p>
+                                    </div>
+                                     <button className="goal-item-delete" onClick={(e) => handleDeleteGoal(e, goal.id)} aria-label="Delete goal">
+                                         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <div className="no-goals-message">No completed goals yet.</div>
+                    )}
+                </section>
+            </main>
+            
+            {isCreatorOpen && (
+                <div className="goal-creator-modal-overlay">
+                    <div className="goal-creator-modal-content">
+                        <div className="goal-creator-modal-header">
+                            <h2>New S.M.A.R.T. Goal</h2>
+                            <button className="close-modal-btn" onClick={resetCreator} aria-label="Close">
+                                <svg viewBox="0 0 24 24" fill="currentColor" width="28" height="28"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                            </button>
+                        </div>
+                        <form className="goal-creator-form" onSubmit={handleSaveGoal}>
+                            <div className="form-group">
+                                <label>Specific <span>What, specifically, do you want to achieve?</span></label>
+                                <textarea name="title" value={newGoal.title} onChange={handleInputChange} rows={2} required />
+                            </div>
+                             <div className="form-group">
+                                <label>Measurable <span>How will you measure progress?</span></label>
+                                <textarea name="measurable" value={newGoal.measurable} onChange={handleInputChange} rows={2} />
+                            </div>
+                             <div className="form-group">
+                                <label>Achievable <span>Is this realistic? What are the steps?</span></label>
+                                <textarea name="achievable" value={newGoal.achievable} onChange={handleInputChange} rows={2} />
+                            </div>
+                             <div className="form-group">
+                                <label>Relevant <span>Why is this important to you?</span></label>
+                                <textarea name="relevant" value={newGoal.relevant} onChange={handleInputChange} rows={2} />
+                                {coreValues.length > 0 ? (
+                                    <div className="relevant-values-container">
+                                        <h4>Link to your Core Values (optional)</h4>
+                                        <div className="relevant-values-grid">
+                                            {coreValues.map(value => (
+                                                <button
+                                                    type="button"
+                                                    key={value}
+                                                    className={`value-chip ${newGoal.relevantValues.includes(value) ? 'selected' : ''}`}
+                                                    onClick={() => handleValueSelect(value)}
+                                                >
+                                                    {value}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="no-values-prompt">
+                                        <p>Link goals to your core principles for more motivation. You haven't defined your values yet.</p>
+                                        <button type="button" className="dashboard-card-cta" onClick={() => navigate('values-exercise')}>
+                                            Discover Your Values
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                             <div className="form-group">
+                                <label>Time-bound <span>What is your target date?</span></label>
+                                <input type="date" name="targetDate" value={newGoal.targetDate} onChange={handleInputChange} required />
+                            </div>
+                            <div className="goal-creator-actions">
+                                <button type="button" className="modal-button cancel" onClick={resetCreator}>Cancel</button>
+                                <button type="submit" className="modal-button confirm" style={{backgroundColor: 'var(--accent-teal)', color: 'var(--bg-dark)'}}>Save Goal</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// --- AUDIT Screener Page ---
+const AUDIT_QUESTIONS = [
+    {
+        question: 'How often do you have a drink containing alcohol?',
+        answers: [
+            { text: 'Never', score: 0 },
+            { text: 'Monthly or less', score: 1 },
+            { text: '2 to 4 times a month', score: 2 },
+            { text: '2 to 3 times a week', score: 3 },
+            { text: '4 or more times a week', score: 4 },
+        ],
+    },
+    {
+        question: 'How many drinks containing alcohol do you have on a typical day when you are drinking?',
+        answers: [
+            { text: '1 or 2', score: 0 },
+            { text: '3 or 4', score: 1 },
+            { text: '5 or 6', score: 2 },
+            { text: '7 to 9', score: 3 },
+            { text: '10 or more', score: 4 },
+        ],
+    },
+    {
+        question: 'How often do you have six or more drinks on one occasion?',
+        answers: [
+            { text: 'Never', score: 0 },
+            { text: 'Less than monthly', score: 1 },
+            { text: 'Monthly', score: 2 },
+            { text: 'Weekly', score: 3 },
+            { text: 'Daily or almost daily', score: 4 },
+        ],
+    },
+    {
+        question: 'How often during the last year have you found that you were not able to stop drinking once you had started?',
+        answers: [
+            { text: 'Never', score: 0 },
+            { text: 'Less than monthly', score: 1 },
+            { text: 'Monthly', score: 2 },
+            { text: 'Weekly', score: 3 },
+            { text: 'Daily or almost daily', score: 4 },
+        ],
+    },
+    {
+        question: 'How often during the last year have you failed to do what was normally expected from you because of drinking?',
+        answers: [
+            { text: 'Never', score: 0 },
+            { text: 'Less than monthly', score: 1 },
+            { text: 'Monthly', score: 2 },
+            { text: 'Weekly', score: 3 },
+            { text: 'Daily or almost daily', score: 4 },
+        ],
+    },
+    {
+        question: 'How often during the last year have you needed a first drink in the morning to get yourself going after a heavy drinking session?',
+        answers: [
+            { text: 'Never', score: 0 },
+            { text: 'Less than monthly', score: 1 },
+            { text: 'Monthly', score: 2 },
+            { text: 'Weekly', score: 3 },
+            { text: 'Daily or almost daily', score: 4 },
+        ],
+    },
+    {
+        question: 'How often during the last year have you had a feeling of guilt or remorse after drinking?',
+        answers: [
+            { text: 'Never', score: 0 },
+            { text: 'Less than monthly', score: 1 },
+            { text: 'Monthly', score: 2 },
+            { text: 'Weekly', score: 3 },
+            { text: 'Daily or almost daily', score: 4 },
+        ],
+    },
+    {
+        question: 'How often during the last year have you been unable to remember what happened the night before because you had been drinking?',
+        answers: [
+            { text: 'Never', score: 0 },
+            { text: 'Less than monthly', score: 1 },
+            { text: 'Monthly', score: 2 },
+            { text: 'Weekly', score: 3 },
+            { text: 'Daily or almost daily', score: 4 },
+        ],
+    },
+    {
+        question: 'Have you or someone else been injured as a result of your drinking?',
+        answers: [
+            { text: 'No', score: 0 },
+            { text: 'Yes, but not in the last year', score: 2 },
+            { text: 'Yes, during the last year', score: 4 },
+        ],
+    },
+    {
+        question: 'Has a relative or friend or a doctor or another health worker been concerned about your drinking or suggested you cut down?',
+        answers: [
+            { text: 'No', score: 0 },
+            { text: 'Yes, but not in the last year', score: 2 },
+            { text: 'Yes, during the last year', score: 4 },
+        ],
+    },
+];
+
+const getAuditResult = (score: number) => {
+    if (score <= 7) {
+        return {
+            zone: 'I',
+            level: 'Low Risk',
+            recommendation: 'Your responses suggest you are at low risk for problems related to alcohol. It\'s a great idea to continue being mindful of your alcohol consumption.',
+        };
+    } else if (score <= 15) {
+        return {
+            zone: 'II',
+            level: 'Risky',
+            recommendation: 'Your drinking pattern suggests some risk. It may be helpful to think about reducing your alcohol intake. Consider setting limits for yourself and exploring strategies for moderation.',
+        };
+    } else if (score <= 19) {
+        return {
+            zone: 'III',
+            level: 'Harmful',
+            recommendation: 'Your drinking is at a level that could be harmful to your health and well-being. It is strongly advised that you take steps to reduce your drinking. Talking to a healthcare provider could be a beneficial next step.',
+        };
+    } else {
+        return {
+            zone: 'IV',
+            level: 'High Risk / Possible Dependence',
+            recommendation: 'Your score indicates a high level of risk and possible alcohol dependence. It is highly recommended that you seek further evaluation from a healthcare professional or a specialist in addiction.',
+        };
+    }
+};
+
+const AuditPage = ({ navigate }) => {
+    const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+    const [answers, setAnswers] = useState<{[key: number]: number}>({});
+    const [history, setHistory] = useState<AuditHistoryEntry[]>([]);
+    const [showResults, setShowResults] = useState(false);
+    const finalScore = useMemo(() => Object.values(answers).reduce((sum: number, score: number) => sum + score, 0), [answers]);
+    
+    useEffect(() => {
+        const storedHistory = JSON.parse(localStorage.getItem('auditHistory') || '[]') as AuditHistoryEntry[];
+        setHistory(storedHistory);
+    }, []);
+
+    const handleAnswerSelect = (questionIndex, score) => {
+        setAnswers(prev => ({ ...prev, [questionIndex]: score }));
+    };
+    
+    const calculateAndShowResults = () => {
+        const newHistory = [{ score: finalScore, date: new Date().toISOString() }, ...history];
+        localStorage.setItem('auditHistory', JSON.stringify(newHistory));
+        setHistory(newHistory);
+        setShowResults(true);
+        window.dispatchEvent(new Event('app:action'));
+    };
+    
+    const handleRetake = () => {
+        setAnswers({});
+        setCurrentQuestionIndex(0);
+        setShowResults(false);
+    };
+
+    if (showResults) {
+        const result = getAuditResult(finalScore);
         return (
-            <div className="page-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                <div className="spinner"></div>
+            <div className="page-container" style={{paddingTop: '1rem'}}>
+                 <header className="page-header-text" style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                    <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                    </button>
+                    <h1 className="app-title">AUDIT Result</h1>
+                </header>
+                <main>
+                    <div className="card no-hover audit-result-card">
+                        <div className={`audit-score-display zone-${result.zone}`}>
+                            <span className="audit-score-value">{finalScore}</span>
+                            <span className="audit-score-label">Score</span>
+                        </div>
+                        <h2 className={`audit-level-display zone-${result.zone}`}>Zone {result.zone}: {result.level}</h2>
+                        <p className="audit-recommendation">{result.recommendation}</p>
+                    </div>
+                    
+                    <div className="card no-hover disclaimer-card">
+                        <h4>Disclaimer</h4>
+                        <p>This tool is an educational screener, not a diagnostic test. The results are not a substitute for professional medical advice. Please consult with a healthcare provider to discuss your results.</p>
+                    </div>
+                    
+                    <button onClick={handleRetake} className="log-button" style={{marginTop: '2rem'}}>Retake the Screener</button>
+                    
+                     <section className="audit-history">
+                        <h3 className="history-title">Your Previous Scores</h3>
+                        {history.length > 0 ? (
+                             <ul>
+                                {history.map((entry, index) => (
+                                    <li key={index}>
+                                        <span><strong>Score: {entry.score}</strong> ({getAuditResult(entry.score).level})</span>
+                                        <span>{new Date(entry.date).toLocaleDateString()}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="no-history-message">No previous results found.</p>
+                        )}
+                    </section>
+                </main>
             </div>
         );
     }
-
+    
+    const progress = (currentQuestionIndex / AUDIT_QUESTIONS.length) * 100;
+    const currentQuestion = AUDIT_QUESTIONS[currentQuestionIndex];
+    
     return (
-        <div className="page-container">
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back to home">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                        <span>Home</span>
-                    </button>
+        <div className="page-container" style={{paddingTop: '1rem'}}>
+            <header className="page-header-text" style={{display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem'}}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <h1 className="app-title">AUDIT Screener</h1>
+                    <InfoTooltip text="The Alcohol Use Disorders Identification Test (AUDIT) is a 10-question screening tool from the World Health Organization to assess alcohol consumption, drinking behaviors, and alcohol-related problems." />
                 </div>
-                <main>
-                    <div className="page-header-text">
-                        <h1 className="app-title">Your History</h1>
-                        <p className="app-subtitle">A timeline of your entire journey.</p>
+            </header>
+            <main>
+                 <div className="audit-progress-bar-container">
+                    <div className="audit-progress-bar" style={{ width: `${progress}%` }}></div>
+                </div>
+                <div className="card no-hover audit-question-card">
+                    <p className="audit-question-number">Question {currentQuestionIndex + 1} of {AUDIT_QUESTIONS.length}</p>
+                    <h2 className="audit-question-text">{currentQuestion.question}</h2>
+                    <div className="audit-answer-options">
+                        {currentQuestion.answers.map((answer, index) => (
+                            <button
+                                key={index}
+                                className={`audit-answer-button ${answers[currentQuestionIndex] === answer.score ? 'selected' : ''}`}
+                                onClick={() => handleAnswerSelect(currentQuestionIndex, answer.score)}
+                            >
+                                {answer.text}
+                            </button>
+                        ))}
                     </div>
-                    
-                    {combinedHistory.length > 0 ? (
-                        <div className="history-list-container">
-                            {combinedHistory.map(item => <HistoryItemCard key={item.id} item={item} />)}
-                        </div>
+                </div>
+                <div className="audit-navigation">
+                    <button
+                        className="log-button secondary"
+                        onClick={() => setCurrentQuestionIndex(p => p - 1)}
+                        disabled={currentQuestionIndex === 0}
+                    >
+                        Previous
+                    </button>
+                    {currentQuestionIndex === AUDIT_QUESTIONS.length - 1 ? (
+                         <button
+                            className="log-button"
+                            onClick={calculateAndShowResults}
+                            disabled={answers[currentQuestionIndex] === undefined}
+                        >
+                            Finish
+                        </button>
                     ) : (
-                        <div className="no-data-placeholder card" style={{ padding: '3rem 1rem' }}>
-                            <p>No activities have been logged yet. Your history will appear here once you start using the tools.</p>
-                        </div>
+                        <button
+                            className="log-button"
+                            onClick={() => setCurrentQuestionIndex(p => p + 1)}
+                            disabled={answers[currentQuestionIndex] === undefined}
+                        >
+                            Next
+                        </button>
                     )}
+                </div>
+            </main>
+        </div>
+    );
+};
+
+// --- ADHD Screener Page ---
+const ADHD_QUESTIONS = [
+    { question: 'How often do you have trouble wrapping up the final details of a project, once the challenging parts have been done?' },
+    { question: 'How often do you have difficulty getting things in order when you have to do a task that requires organization?' },
+    { question: 'How often do you have problems remembering appointments or obligations?' },
+    { question: 'When you have a task that requires a lot of thought, how often do you avoid or delay getting started?' },
+    { question: 'How often do you fidget or squirm with your hands or feet when you have to sit down for a long time?' },
+    { question: 'How often do you feel overly active and compelled to do things, like you were driven by a motor?' },
+];
+const ADHD_ANSWERS = [
+    { text: 'Never', value: 0 },
+    { text: 'Rarely', value: 1 },
+    { text: 'Sometimes', value: 2 },
+    { text: 'Often', value: 3 },
+    { text: 'Very Often', value: 4 },
+];
+
+const ADHDPage = ({ navigate }) => {
+    const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+    const [answers, setAnswers] = useState<{[key: number]: number}>({});
+    const [history, setHistory] = useState<AdhdHistoryEntry[]>([]);
+    const [showResults, setShowResults] = useState(false);
+    const [finalScore, setFinalScore] = useState(0);
+
+    useEffect(() => {
+        const storedHistory = JSON.parse(localStorage.getItem('adhdHistory') || '[]') as AdhdHistoryEntry[];
+        setHistory(storedHistory);
+    }, []);
+
+    const handleAnswerSelect = (questionIndex, value) => {
+        setAnswers(prev => ({ ...prev, [questionIndex]: value }));
+    };
+
+    const calculateAndShowResults = () => {
+        let score = 0;
+        // For questions 0-2 (1-3), "Sometimes", "Often", or "Very Often" are indicative (value >= 2)
+        // For questions 3-5 (4-6), "Often" or "Very Often" are indicative (value >= 3)
+        const indicativeThresholds = { 0: 2, 1: 2, 2: 2, 3: 3, 4: 3, 5: 3 };
+        
+        for (const qIndexStr in answers) {
+            const qIndex = parseInt(qIndexStr, 10);
+            if (answers[qIndex] >= indicativeThresholds[qIndex]) {
+                score++;
+            }
+        }
+        
+        const newHistory: AdhdHistoryEntry[] = [{ score, date: new Date().toISOString(), answers }, ...history];
+        localStorage.setItem('adhdHistory', JSON.stringify(newHistory));
+        setHistory(newHistory);
+        setFinalScore(score);
+        setShowResults(true);
+        window.dispatchEvent(new Event('app:action'));
+    };
+
+    const handleRetake = () => {
+        setAnswers({});
+        setCurrentQuestionIndex(0);
+        setShowResults(false);
+    };
+
+    if (showResults) {
+        const isConsistent = finalScore >= 4;
+        return (
+            <div className="page-container" style={{ paddingTop: '1rem' }}>
+                <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                    <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                    </button>
+                    <h1 className="app-title">ADHD Screener Result</h1>
+                </header>
+                <main>
+                    <div className="card no-hover adhd-result-card">
+                        <h2 className="adhd-result-header">{isConsistent ? "Symptoms May Be Consistent with Adult ADHD" : "Symptoms Not Consistent with Adult ADHD"}</h2>
+                        <p className="adhd-result-text">
+                            You indicated symptoms in <strong>{finalScore} out of 6</strong> key areas.
+                            {isConsistent
+                                ? " A score of 4 or more is highly consistent with Adult ADHD, suggesting that further investigation is warranted."
+                                : " This result suggests that your symptoms may not be consistent with Adult ADHD. However, this is just a screener."}
+                        </p>
+                    </div>
+
+                    <div className="card no-hover disclaimer-card">
+                        <h4>Disclaimer</h4>
+                        <p>This self-report questionnaire is an educational screener, not a diagnostic test. A high score does not confirm a diagnosis, and a low score does not rule it out. Please consult with a qualified healthcare professional to discuss your results and any concerns you may have.</p>
+                    </div>
+
+                    <button onClick={handleRetake} className="log-button" style={{ marginTop: '2rem' }}>Retake the Screener</button>
+
+                    <section className="adhd-history">
+                        <h3 className="history-title">Your Previous Results</h3>
+                        {history.length > 0 ? (
+                            <ul>
+                                {history.map((entry, index) => (
+                                    <li key={index}>
+                                        <span><strong>Score: {entry.score}/6</strong> ({entry.score >= 4 ? "May be consistent" : "Not consistent"})</span>
+                                        <span>{new Date(entry.date).toLocaleDateString()}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p className="no-history-message">No previous results found.</p>
+                        )}
+                    </section>
                 </main>
             </div>
+        );
+    }
+    
+    const progress = (currentQuestionIndex / ADHD_QUESTIONS.length) * 100;
+    const currentQuestion = ADHD_QUESTIONS[currentQuestionIndex];
+
+    return (
+        <div className="page-container" style={{ paddingTop: '1rem' }}>
+            <header className="page-header-text" style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                <button onClick={() => navigate('tools')} className="back-button" aria-label="Go Back to Tools">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <h1 className="app-title">ADHD Screener</h1>
+                    <InfoTooltip text="The Adult ADHD Self-Report Scale (ASRS) is a 6-question screening tool used to help identify symptoms consistent with Attention Deficit Hyperactivity Disorder (ADHD) in adults." />
+                </div>
+            </header>
+            <main>
+                <div className="adhd-progress-bar-container">
+                    <div className="adhd-progress-bar" style={{ width: `${progress}%` }}></div>
+                </div>
+                <div className="card no-hover adhd-question-card">
+                    <p className="adhd-question-number">Question {currentQuestionIndex + 1} of {ADHD_QUESTIONS.length}</p>
+                    <h2 className="adhd-question-text">{currentQuestion.question}</h2>
+                    <div className="adhd-answer-options">
+                        {ADHD_ANSWERS.map((answer, index) => (
+                            <button
+                                key={index}
+                                className={`adhd-answer-button ${answers[currentQuestionIndex] === answer.value ? 'selected' : ''}`}
+                                onClick={() => handleAnswerSelect(currentQuestionIndex, answer.value)}
+                            >
+                                {answer.text}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+                <div className="adhd-navigation">
+                    <button
+                        className="log-button secondary"
+                        onClick={() => setCurrentQuestionIndex(p => p - 1)}
+                        disabled={currentQuestionIndex === 0}
+                    >
+                        Previous
+                    </button>
+                    {currentQuestionIndex === ADHD_QUESTIONS.length - 1 ? (
+                        <button
+                            className="log-button"
+                            onClick={calculateAndShowResults}
+                            disabled={answers[currentQuestionIndex] === undefined}
+                        >
+                            Finish
+                        </button>
+                    ) : (
+                        <button
+                            className="log-button"
+                            onClick={() => setCurrentQuestionIndex(p => p + 1)}
+                            disabled={answers[currentQuestionIndex] === undefined}
+                        >
+                            Next
+                        </button>
+                    )}
+                </div>
+            </main>
         </div>
     );
 };
 
 
-// Data for menu search functionality
-const SEARCHABLE_ITEMS = [
-    { title: 'Profile', page: 'profile', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> },
-    { title: 'History', page: 'history', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> },
-    { title: 'Data & Privacy', page: 'data-privacy', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg> },
-    { title: 'Known Bugs', page: 'known-bugs', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 11.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0z"/><path d="M20 18.5a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z"/><path d="M4 18.5a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z"/><path d="M18 12H6"/><path d="M11 3.4a12 12 0 0 1 2 0"/><path d="M17.7 5.2a12 12 0 0 1 1.6 1.6"/><path d="M20.6 11a12 12 0 0 1 0 2"/><path d="M19.4 17.7a12 12 0 0 1-1.6 1.6"/><path d="M13 20.6a12 12 0 0 1-2 0"/><path d="M6.3 19.4a12 12 0 0 1-1.6-1.6"/><path d="M3.4 13a12 12 0 0 1 0-2"/><path d="M5.2 6.3a12 12 0 0 1 1.6-1.6"/></svg> },
-    { title: 'Daily Journal', page: 'tracker', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> },
-    { title: 'Cravings Tracker', page: 'cravings-tracker', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h3v8H3zM8 8h3v12H8zM13 4h3v16h-3zM18 16h3v4h-3z"/></svg> },
-    { title: 'Goals', page: 'goals', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg> },
-    { title: 'Breathing Exercise', page: 'breathing-exercise', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg> },
-    { title: '5-4-3-2-1 Method', page: 'five-four-three-two-one', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M7 20h10" /><path d="M10 20v-6l-2-2a3 3 0 0 1-2-2.8V8.2a3 3 0 0 1 2-2.8l2-1.2a3 3 0 0 1 3.2 0l2 1.2a3 3 0 0 1 2 2.8v1a3 3 0 0 1-2 2.8l-2 2v6" /></svg> },
-    { title: 'Guided Audio', page: 'guided-audio', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg> },
-    { title: 'Feelings Explorer', page: 'toolkit', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M8 15h8"></path><line x1="9" y1="10" x2="9.01" y2="10"></line><line x1="15" y1="10" x2="15.01" y2="10"></line></svg> },
-    { title: 'Values Exercise', page: 'values-exercise', params: { initialStep: 'deck-selection' }, icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg> },
-    { title: 'The Thought Triangle', page: 'thought-triangle', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 21h20L12 2z"></path></svg> },
-    { title: 'Three Good Things', page: 'three-good-things', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg> },
-    { title: 'Wind-Down Routine', page: 'wind-down-toolkit', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg> },
-    { title: 'AUDIT Alcohol Screen', page: 'audit-test', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg> },
-];
+const JourneyPage = ({ navigate, unlockedAchievements }) => {
+    const totalAchievements = Object.keys(ACHIEVEMENTS_DEFINITIONS).length;
+    const unlockedCount = unlockedAchievements.length;
+    const progress = totalAchievements > 0 ? (unlockedCount / totalAchievements) * 100 : 0;
+    
+    const [auditHistory, setAuditHistory] = useState<AuditHistoryEntry[]>([]);
+    const [adhdHistory, setAdhdHistory] = useState<AdhdHistoryEntry[]>([]);
+    const [journalHistory, setJournalHistory] = useState<JournalHistoryEntry[]>([]);
+    const [cravingsHistory, setCravingsHistory] = useState<CravingsHistoryEntry[]>([]);
+    const [goals, setGoals] = useState<GoalEntry[]>([]);
+    const [gratitudeHistory, setGratitudeHistory] = useState<GratitudeEntry[]>([]);
+    const [thoughtDiaryHistory, setThoughtDiaryHistory] = useState<ThoughtDiaryEntry[]>([]);
+    const [meditationHistory, setMeditationHistory] = useState<MeditationEntry[]>([]);
+
+    useEffect(() => {
+        setAuditHistory(JSON.parse(localStorage.getItem('auditHistory') || '[]'));
+        setAdhdHistory(JSON.parse(localStorage.getItem('adhdHistory') || '[]'));
+        setJournalHistory(JSON.parse(localStorage.getItem('journalHistory') || '[]'));
+        setCravingsHistory(JSON.parse(localStorage.getItem('cravingsHistory') || '[]'));
+        setGoals(JSON.parse(localStorage.getItem('goals') || '[]'));
+        setGratitudeHistory(JSON.parse(localStorage.getItem('gratitudeHistory') || '[]'));
+        setThoughtDiaryHistory(JSON.parse(localStorage.getItem('thoughtDiaryHistory') || '[]'));
+        setMeditationHistory(JSON.parse(localStorage.getItem('meditationHistory') || '[]'));
+    }, []);
+    
+    return (<div className="page-container">
+        <header className="page-header-text">
+            <h1 className="app-title">My Journey</h1>
+            <p className="app-subtitle">Review your progress and insights.</p>
+        </header>
+        <main className="journey-dashboard">
+            <div className="card" onClick={() => navigate('achievements')} style={{alignItems: 'flex-start', textAlign: 'left', gap: '0.5rem'}}>
+                <h3 className="summary-card-title" style={{fontSize: '1.1rem'}}>My Achievements</h3>
+                 <div className="achievements-progress-bar-container" style={{marginBottom: '0.5rem'}}>
+                        <div className="achievements-progress-bar" style={{ width: `${progress}%` }}></div>
+                 </div>
+                <p className="card-subtitle">{unlockedCount} / {totalAchievements} Unlocked</p>
+            </div>
+            
+            <div className="card summary-card" style={{alignItems: 'flex-start', textAlign: 'left', gap: '0.5rem'}}>
+                <h3 className="summary-card-title" style={{fontSize: '1.1rem'}}>Daily Journal History</h3>
+                <div className="journey-card-content">
+                    {journalHistory.length > 0 ? (
+                        <ul className="journey-history-list">
+                            {journalHistory.slice(0, 3).map((entry, index) => (
+                                <li key={index} className="journey-history-item">
+                                    <span className="journey-history-item-date">{new Date(entry.date).toLocaleDateString()}</span>
+                                    <span className="journey-history-item-result">{entry.data.feeling} / {entry.data.substance}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <div className="no-data-placeholder">
+                            <p>You haven't made any journal entries yet.</p>
+                            <button className="dashboard-card-cta" onClick={() => navigate('journal')}>Make an Entry</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+             <div className="card summary-card" style={{alignItems: 'flex-start', textAlign: 'left', gap: '0.5rem'}}>
+                <h3 className="summary-card-title" style={{fontSize: '1.1rem'}}>Gratitude History</h3>
+                <div className="journey-card-content">
+                    {gratitudeHistory.length > 0 ? (
+                        <ul className="journey-history-list">
+                            {gratitudeHistory.slice(0, 3).map((entry, index) => (
+                                <li key={index} className="journey-history-item" style={{flexDirection: 'column', alignItems: 'flex-start'}}>
+                                    <span className="journey-history-item-date" style={{marginBottom: '0.5rem'}}>{new Date(entry.date).toLocaleDateString()}</span>
+                                    <span className="journey-history-item-result" style={{textAlign: 'left', fontStyle: 'italic', color: 'var(--text-muted)'}}>{entry.items[0]}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <div className="no-data-placeholder">
+                            <p>You haven't logged any gratitude yet.</p>
+                            <button className="dashboard-card-cta" onClick={() => navigate('gratitude')}>Log Gratitude</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="card summary-card" style={{alignItems: 'flex-start', textAlign: 'left', gap: '0.5rem'}}>
+                <h3 className="summary-card-title" style={{fontSize: '1.1rem'}}>Craving Tracker History</h3>
+                <div className="journey-card-content">
+                    {cravingsHistory.length > 0 ? (
+                        <ul className="journey-history-list">
+                            {cravingsHistory.slice(0, 3).map((entry, index) => (
+                                <li key={index} className="journey-history-item">
+                                    <span className="journey-history-item-date">{new Date(entry.date).toLocaleDateString()}</span>
+                                    <span className="journey-history-item-result">Intensity: {entry.intensity}/10</span>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <div className="no-data-placeholder">
+                            <p>You haven't tracked any cravings yet.</p>
+                            <button className="dashboard-card-cta" onClick={() => navigate('cravings')}>Track a Craving</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="card summary-card" style={{alignItems: 'flex-start', textAlign: 'left', gap: '0.5rem'}}>
+                <h3 className="summary-card-title" style={{fontSize: '1.1rem'}}>Thought Diary History</h3>
+                <div className="journey-card-content">
+                    {thoughtDiaryHistory.length > 0 ? (
+                        <ul className="journey-history-list">
+                            {thoughtDiaryHistory.slice(0, 3).map((entry, index) => (
+                                <li key={index} className="journey-history-item">
+                                    <span className="journey-history-item-date">{new Date(entry.date).toLocaleDateString()}</span>
+                                    <span className="journey-history-item-result">{entry.data.situation.substring(0, 20)}...</span>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        <div className="no-data-placeholder">
+                            <p>You haven't completed a thought diary yet.</p>
+                            <button className="dashboard-card-cta" onClick={() => navigate('thought-diary')}>Start Entry</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="card summary-card" style={{alignItems: 'flex-start', textAlign: 'left', gap: '0.5rem'}}>
+                <h3 className="summary-card-title" style={{fontSize: '1.1rem'}}>My Goals History</h3>
+                 <div className="journey-card-content">
+                    {goals.length > 0 ? (
+                        <ul className="journey-history-list">
+                             {goals.slice(0, 3).map((goal) => (
+                                <li key={goal.id} className="journey-history-item" style={{textTransform: 'capitalize'}}>
+                                    <span>{goal.title}</span>
+                                    <span>{goal.status}</span>
+                                </li>
+                             ))}
+                        </ul>
+                    ) : (
+                        <div className="no-data-placeholder">
+                            <p>You haven't set any goals yet.</p>
+                            <button className="dashboard-card-cta" onClick={() => navigate('goals')}>Set a Goal</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="card summary-card" style={{alignItems: 'flex-start', textAlign: 'left', gap: '0.5rem'}}>
+                <h3 className="summary-card-title" style={{fontSize: '1.1rem'}}>Meditation History</h3>
+                <div className="journey-card-content">
+                    {meditationHistory.length > 0 ? (
+                        <ul className="journey-history-list">
+                             {meditationHistory.slice(0, 3).map((entry, index) => (
+                                <li key={index} className="journey-history-item">
+                                    <span className="journey-history-item-date">{new Date(entry.date).toLocaleDateString()}</span>
+                                    <span className="journey-history-item-result">{entry.title}</span>
+                                </li>
+                             ))}
+                        </ul>
+                    ) : (
+                        <div className="no-data-placeholder">
+                            <p>You haven't completed a meditation yet.</p>
+                            <button className="dashboard-card-cta" onClick={() => navigate('meditation')}>Meditate</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="card summary-card" style={{alignItems: 'flex-start', textAlign: 'left', gap: '0.5rem'}}>
+                <h3 className="summary-card-title" style={{fontSize: '1.1rem'}}>AUDIT History</h3>
+                <div className="journey-card-content">
+                    {auditHistory.length > 0 ? (
+                        <ul className="journey-history-list">
+                            {auditHistory.slice(0, 3).map((entry, index) => {
+                                const result = getAuditResult(entry.score);
+                                return (
+                                    <li key={index} className="journey-history-item">
+                                        <span className="journey-history-item-date">{new Date(entry.date).toLocaleDateString()}</span>
+                                        <span className="journey-history-item-result">Score: {entry.score} ({result.level})</span>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    ) : (
+                        <div className="no-data-placeholder">
+                            <p>You haven't completed the AUDIT screener yet.</p>
+                            <button className="dashboard-card-cta" onClick={() => navigate('audit')}>Take Screener</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            <div className="card summary-card" style={{alignItems: 'flex-start', textAlign: 'left', gap: '0.5rem'}}>
+                <h3 className="summary-card-title" style={{fontSize: '1.1rem'}}>ADHD Screener History</h3>
+                 <div className="journey-card-content">
+                    {adhdHistory.length > 0 ? (
+                        <ul className="journey-history-list">
+                             {adhdHistory.slice(0, 3).map((entry, index) => {
+                                const isConsistent = entry.score >= 4;
+                                return (
+                                    <li key={index} className="journey-history-item">
+                                        <span className="journey-history-item-date">{new Date(entry.date).toLocaleDateString()}</span>
+                                        <span className="journey-history-item-result">Score: {entry.score}/6 ({isConsistent ? "Consistent" : "Not Consistent"})</span>
+                                    </li>
+                                );
+                             })}
+                        </ul>
+                    ) : (
+                        <div className="no-data-placeholder">
+                            <p>You haven't completed the ADHD screener yet.</p>
+                            <button className="dashboard-card-cta" onClick={() => navigate('adhd')}>Take Screener</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+        </main>
+    </div>);
+}
+
+// --- Bottom Navigation Bar ---
+const BottomNavBar = ({ currentPage, navigate, onMenuClick }) => {
+    const navItems = [
+        { id: 'home', label: 'Home', icon: <svg className="nav-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg> },
+        { id: 'tools', label: 'Tools', icon: <svg className="nav-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M21.62 10.43c.2-1.6.01-3.61-1.28-5.38-1-1.34-2.43-2.18-4.04-2.4-2.03-.28-4.11.31-5.71 1.5-1.54 1.15-2.58 2.9-2.8 4.88-.17 1.5.18 3.42 1.32 5.21 1.09 1.71 2.58 2.65 4.19 2.87 2.05.28 4.13-.31 5.73-1.51 1.54-1.15 2.58-2.9 2.8-4.88l.07-.17zM12 16c-2.21 0-4-1.79-4-4s1.79-4 4-4 4 1.79 4 4-1.79 4-4 4z"/></svg> },
+        { id: 'journey', label: 'My Journey', icon: <svg className="nav-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M14 6l-3.75 5 2.85 3.8-1.6 1.2C9.81 13.75 7 10 7 10l-6 8h22L14 6z"/></svg> },
+        { id: 'menu', label: 'Menu', icon: <svg className="nav-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg> },
+    ];
+    
+    return (
+        <nav className="bottom-nav-bar">
+            {navItems.map(item => (
+                <button
+                    key={item.id}
+                    className={`nav-item ${currentPage === item.id ? 'active' : ''}`}
+                    onClick={() => {
+                        if (item.id === 'menu') {
+                            onMenuClick();
+                        } else {
+                            navigate(item.id);
+                        }
+                    }}
+                    aria-label={item.label}
+                >
+                    {item.icon}
+                    <span className="nav-label">{item.label}</span>
+                </button>
+            ))}
+        </nav>
+    );
+};
+
 
 // --- Profile Menu Component ---
-const ProfileMenu = ({ isOpen, onClose, onNavigate }) => {
-    const [searchQuery, setSearchQuery] = useState('');
+const ProfileMenu = ({ isOpen, onClose, navigate, installPromptEvent, onInstallClick }: { isOpen: boolean, onClose: () => void, navigate: (page: string) => void, installPromptEvent: any, onInstallClick: () => void }) => {
+    const menuRef = useRef(null);
 
-    const handleLogout = () => {
-        if (window.confirm("Are you sure you want to log out?")) {
-            window.location.reload();
+    const handleItemClick = (page: string) => {
+        if (page === 'install') {
+            onInstallClick();
+        } else if (page.startsWith('http')) {
+            window.open(page, '_blank');
+            if (page.includes('discord')) {
+                const currentEvents = JSON.parse(localStorage.getItem('eventHistory') || '[]') as string[];
+                localStorage.setItem('eventHistory', JSON.stringify([...currentEvents, 'discord_visit']));
+                window.dispatchEvent(new Event('app:action'));
+            }
+        } else if (page.startsWith('mailto:')) {
+            window.location.href = page;
+        } else if (page === 'logout') {
+            const pin = localStorage.getItem('userPIN');
+            if (pin) {
+                window.location.reload();
+            }
+        } else {
+            navigate(page);
         }
+        onClose();
     };
+    
+    const menuItems = useMemo(() => {
+        const baseItems = [
+            { id: 'profile', label: 'My Profile', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg> },
+            { type: 'divider' },
+            { id: 'discord', label: 'The Discord Community', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.54 5.32c-1.3-.85-2.78-1.37-4.34-1.57-.44.63-.79 1.3-1.07 2-.5-.13-1-.24-1.52-.32.22-.69.5-1.35.8-2.02-1.54-.2-3.03-.73-4.33-1.57C3.53 7.63 2.5 11.9 4.1 16.22c2.1 1.42 4.22 1.63 4.22 1.63l.14-.32c-1.25-.33-2.33-.87-3.2-1.5.2.14.4.28.6.42 3.12 1.95 7.42 1.95 10.54 0 .2-.14.4-.28.6-.42-1.03.73-2.14 1.2-3.34 1.5l.14.32s2.12-.21 4.22-1.63c1.6-4.32.56-8.6-2.9-10.9zM9.1 13.43c-.83 0-1.5-.7-1.5-1.54s.67-1.54 1.5-1.54c.82 0 1.5.7 1.5 1.54s-.68 1.54-1.5 1.54zm5.8 0c-.83 0-1.5-.7-1.5-1.54s.67-1.54 1.5-1.54c.82 0 1.5.7 1.5 1.54s-.68 1.54-1.5 1.54z"/></svg>, navigate: 'https://discord.gg/w7N497SM' },
+            { id: 'privacy', label: 'Privacy Policy', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>, navigate: 'privacy' },
+            { type: 'divider' },
+            { id: 'website', label: 'Website', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm6.93 6h-2.95a15.65 15.65 0 00-1.38-3.56A8.03 8.03 0 0118.92 8zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56A7.987 7.987 0 015.08 16zm2.95-8H5.08a7.987 7.987 0 014.3-3.56C8.81 5.55 8.35 6.75 8.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 01-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z"/></svg>, navigate: 'https://www.yourjourneyyourtools.com' },
+            { id: 'contact', label: 'Contact Us', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>, navigate: 'mailto:yourjourneyyourtools@gmail.com' },
+            { type: 'divider' },
+            { id: 'logout', label: 'Logout', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg> }
+        ];
 
-    const filteredItems = searchQuery
-        ? SEARCHABLE_ITEMS.filter(item =>
-            item.title.toLowerCase().includes(searchQuery.toLowerCase())
-          )
-        : [];
+        if (installPromptEvent) {
+            return [
+                { id: 'install', label: 'Download App', icon: <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 20h14v-2H5v2zM19 9h-4V3H9v6H5l7 7 7-7z"/></svg> },
+                { type: 'divider' },
+                ...baseItems
+            ];
+        }
+        return baseItems;
+    }, [installPromptEvent]);
 
     return (
         <>
             <div className={`profile-menu-overlay ${isOpen ? 'open' : ''}`} onClick={onClose}></div>
-            <div className={`profile-slide-menu ${isOpen ? 'open' : ''}`}>
+            <aside ref={menuRef} className={`profile-slide-menu ${isOpen ? 'open' : ''}`}>
                 <h2 className="profile-menu-title">Menu</h2>
-                <div className="profile-menu-search">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                    <input
-                        type="search"
-                        placeholder="Search tools & settings..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        autoComplete="off"
-                    />
-                </div>
-
-                {searchQuery.length > 0 ? (
-                    <div className="search-results-list">
-                        {filteredItems.length > 0 ? (
-                            filteredItems.map(item => (
-                                <button
-                                    key={item.title}
-                                    className="profile-menu-item"
-                                    onClick={() => {
-                                        onNavigate(item.page, item.params);
-                                        onClose();
-                                    }}
-                                >
-                                    {item.icon}
-                                    <span>{item.title}</span>
-                                </button>
-                            ))
-                        ) : (
-                            <p className="no-results-message">No results found.</p>
-                        )}
-                    </div>
-                ) : (
-                    <>
-                        <div className="profile-menu-divider"></div>
-                        <button className="profile-menu-item" onClick={() => { onNavigate('profile'); onClose(); }}>
-                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                            <span>Profile</span>
-                        </button>
-                         <button className="profile-menu-item" onClick={() => { onNavigate('history'); onClose(); }}>
-                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
-                            <span>History</span>
-                        </button>
-                        <button className="profile-menu-item" onClick={() => { onNavigate('data-privacy'); onClose(); }}>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-                            <span>Data & Privacy</span>
-                        </button>
-                        <button className="profile-menu-item" onClick={handleLogout}>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-                            <span>Logout</span>
-                        </button>
-                        
-                        <div className="profile-menu-divider"></div>
-
-                        <h3 className="profile-menu-subtitle">SUPPORT</h3>
-                        <button onClick={() => window.location.href = 'mailto:yourjourneyyourtools@gmail.com'} className="profile-menu-item">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-                            <span>Email Us</span>
-                        </button>
-                        <a href="https://discord.gg/ESyruxKb" target="_blank" rel="noopener noreferrer" className="profile-menu-item">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-                            <span>Join our Discord</span>
-                        </a>
-                        <button className="profile-menu-item" onClick={() => { onNavigate('known-bugs'); onClose(); }}>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 11.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0z"/><path d="M20 18.5a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z"/><path d="M4 18.5a.5.5 0 1 0-1 0 .5.5 0 0 0 1 0z"/><path d="M18 12H6"/><path d="M11 3.4a12 12 0 0 1 2 0"/><path d="M17.7 5.2a12 12 0 0 1 1.6 1.6"/><path d="M20.6 11a12 12 0 0 1 0 2"/><path d="M19.4 17.7a12 12 0 0 1-1.6 1.6"/><path d="M13 20.6a12 12 0 0 1-2 0"/><path d="M6.3 19.4a12 12 0 0 1-1.6-1.6"/><path d="M3.4 13a12 12 0 0 1 0-2"/><path d="M5.2 6.3a12 12 0 0 1 1.6-1.6"/></svg>
-                            <span>Known Bugs</span>
-                        </button>
-                    </>
-                )}
-            </div>
-        </>
-    );
-};
-
-
-// --- PWA Install Banner Component ---
-const InstallBanner = () => {
-    const [isIOS, setIsIOS] = useState(false);
-    const [isStandalone, setIsStandalone] = useState(false);
-    const [showBanner, setShowBanner] = useState(true);
-
-    useEffect(() => {
-        // Check if the app is running in standalone mode (added to home screen)
-        if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
-            setIsStandalone(true);
-        }
-        // Check if the user is on an iOS device
-        const userAgent = window.navigator.userAgent.toLowerCase();
-        setIsIOS(/iphone|ipad|ipod/.test(userAgent));
-    }, []);
-
-    const handleDismiss = () => {
-        setShowBanner(false);
-        try {
-            sessionStorage.setItem('installBannerDismissed', 'true');
-        } catch(e) { console.error("Could not set session storage for banner", e); }
-    };
-
-    const isDismissed = sessionStorage.getItem('installBannerDismissed') === 'true';
-
-    // Don't show the banner if:
-    // - it's already installed (standalone)
-    // - it's not an iOS device (Android/Desktop have their own install prompts)
-    // - the user has dismissed it in the current session
-    // - the user has closed it
-    if (isStandalone || !isIOS || isDismissed || !showBanner) {
-        return null;
-    }
-
-    return (
-        <div className="install-banner">
-            <p>For the best experience, add this app to your Home Screen. Tap the Share icon, then 'Add to Home Screen'.</p>
-            <button onClick={handleDismiss} className="install-button" style={{background: 'transparent', color: 'var(--bg-dark)', padding: 0}}>Dismiss</button>
-        </div>
-    );
-};
-
-// --- Tracker Hub Page Component ---
-const TrackerHubPage = ({ onBack, onNavigate }) => {
-  const cards = [
-    {
-      title: 'Daily Journal',
-      page: 'tracker',
-      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>,
-      description: 'Log your mood and substance use to gain insight.'
-    },
-    {
-      title: 'Cravings Tracker',
-      page: 'cravings-tracker',
-      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M3 12h3v8H3zM8 8h3v12H8zM13 4h3v16h-3zM18 16h3v4h-3z"/></svg>,
-      description: "Track cravings when they happen to build resilience."
-    },
-    {
-      title: 'Goals',
-      page: 'goals',
-      icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>,
-      description: 'Set and track SMART goals to shape your journey.'
-    }
-  ];
-
-  return (
-    <div className="page-container">
-      <div className="content-with-side-button">
-        <div className="side-button-wrapper">
-          <button onClick={onBack} className="home-button" aria-label="Go back to home">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-            <span>Home</span>
-          </button>
-        </div>
-        <main>
-          <div className="page-header-text">
-            <h1 className="app-title">Track Your Progress</h1>
-            <p className="app-subtitle">Select a tool to log your activities and goals.</p>
-          </div>
-
-          <div className="card-grid home-grid" style={{maxWidth: '800px'}}>
-            {cards.map((card) => (
-              <button
-                key={card.title}
-                className="card"
-                onClick={() => onNavigate(card.page)}
-                aria-label={card.title}
-              >
-                {card.icon}
-                <h2 className="card-title">{card.title}</h2>
-                <p className="card-description">{card.description}</p>
-              </button>
-            ))}
-          </div>
-        </main>
-      </div>
-    </div>
-  );
-};
-
-// --- Toolkit Page Component ---
-const ToolkitPage = ({ onBack, onNavigate }) => {
-    const [isWheelOpen, setIsWheelOpen] = useState(false);
-    const [selectedCategory, setSelectedCategory] = useState(null);
-
-    const toolCategories = [
-        {
-            id: 'calm',
-            title: 'For a Calm Moment',
-            description: 'Techniques for immediate relief and mindfulness.',
-            icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><path d="m16 16-4-4"/><path d="m22 2-6 6"/></svg>,
-            tools: [
-                { title: 'Breathing Exercise', page: 'breathing-exercise', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M17.7 7.7a2.5 2.5 0 1 1 1.8 4.3H2"/><path d="M9.6 4.6A2 2 0 1 1 11 8H2"/><path d="M12.6 19.4A2 2 0 1 0 14 16H2"/></svg> },
-                { title: 'The 5-4-3-2-1 Method', page: 'five-four-three-two-one', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M7 20h10" /><path d="M10 20v-6l-2-2a3 3 0 0 1-2-2.8V8.2a3 3 0 0 1 2-2.8l2-1.2a3 3 0 0 1 3.2 0l2 1.2a3 3 0 0 1 2 2.8v1a3 3 0 0 1-2 2.8l-2 2v6" /></svg> },
-                { title: 'Guided Audio', page: 'guided-audio', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg> },
-                { title: 'Feelings Explorer', action: () => setIsWheelOpen(true), icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><path d="M8 15h8"></path><line x1="9" y1="10" x2="9.01" y2="10"></line><line x1="15" y1="10" x2="15.01" y2="10"></line></svg> },
-            ]
-        },
-        {
-            id: 'reflection',
-            title: 'For Deeper Reflection',
-            description: 'Exercises for self-discovery and changing thought patterns.',
-            icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg>,
-            tools: [
-                { title: 'Values Exercise', page: 'values-exercise', params: { initialStep: 'deck-selection' }, icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg> },
-                { title: 'The Thought Triangle', page: 'thought-triangle', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M12 2L2 21h20L12 2z"></path></svg> },
-                { title: 'Three Good Things', page: 'three-good-things', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg> },
-            ]
-        },
-        {
-            id: 'habits',
-            title: 'For Healthy Habits',
-            description: 'Tools for building routines and self-assessment.',
-            icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="m9 14 2 2 4-4"/></svg>,
-            tools: [
-                { title: 'Wind-Down Routine', page: 'wind-down-toolkit', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg> },
-                { title: 'AUDIT Alcohol Screen', page: 'audit-test', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg> },
-            ]
-        }
-    ];
-
-    const currentCategory = toolCategories.find(c => c.id === selectedCategory);
-
-    if (currentCategory) {
-        return (
-            <div className="page-container">
-                {isWheelOpen && (
-                    <FeelingsWheel 
-                        onFeelingSelect={() => setIsWheelOpen(false)}
-                        onClose={() => setIsWheelOpen(false)}
-                        confirmText="Done Exploring"
-                    />
-                )}
-                <div className="content-with-side-button">
-                    <div className="side-button-wrapper">
-                        <button onClick={() => setSelectedCategory(null)} className="home-button" aria-label="Go back to toolkit categories">
-                           <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"></path><polyline points="12 19 5 12 12 5"></polyline></svg>
-                           <span>Back to Toolkit</span>
-                        </button>
-                    </div>
-                    <main>
-                        <div className="page-header-text">
-                            <h1 className="app-title">{currentCategory.title}</h1>
-                            <p className="app-subtitle">{currentCategory.description}</p>
-                        </div>
-                        <div className="card-grid toolkit-grid">
-                            {currentCategory.tools.map(tool => (
-                                <button 
-                                    key={tool.title} 
-                                    className="card" 
-                                    onClick={() => tool.page ? onNavigate(tool.page, tool.params) : tool.action()}
-                                >
-                                    {tool.icon}
-                                    <h3 className="card-title" style={{fontSize: '1.2rem'}}>{tool.title}</h3>
-                                </button>
-                            ))}
-                        </div>
-                    </main>
-                </div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="page-container">
-            {isWheelOpen && (
-                <FeelingsWheel 
-                    onFeelingSelect={() => setIsWheelOpen(false)}
-                    onClose={() => setIsWheelOpen(false)}
-                    confirmText="Done Exploring"
-                />
-            )}
-            <div className="content-with-side-button">
-                <div className="side-button-wrapper">
-                    <button onClick={onBack} className="home-button" aria-label="Go back to home">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
-                        <span>Home</span>
-                    </button>
-                </div>
-                <main>
-                    <div className="page-header-text">
-                        <h1 className="app-title">Your Toolkit</h1>
-                        <p className="app-subtitle">A collection of exercises to support your well-being.</p>
-                    </div>
-                    <div className="card-grid home-grid" style={{maxWidth: '800px'}}>
-                        {toolCategories.map(category => (
-                            <button
-                                key={category.id}
-                                className="card"
-                                onClick={() => setSelectedCategory(category.id)}
-                            >
-                                {category.icon}
-                                <h2 className="card-title">{category.title}</h2>
-                                <p className="card-description">{category.description}</p>
+                {menuItems.map((item, index) => {
+                    if ('type' in item && item.type === 'divider') {
+                        return <div key={`div-${index}`} className="profile-menu-divider" />;
+                    } else if ('id' in item) { // Type guard
+                        const page = 'navigate' in item && item.navigate ? item.navigate : item.id;
+                        return (
+                            <button key={item.id} className="profile-menu-item" onClick={() => handleItemClick(page)}>
+                                {item.icon}
+                                <span>{item.label}</span>
                             </button>
-                        ))}
-                    </div>
-                </main>
-            </div>
-        </div>
-    );
-};
-
-
-// --- Home Page Component ---
-const HomePage = ({ onNavigate, username }) => {
-    const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-    const homeCards = [
-        { title: 'Your Journey', page: 'journey', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"></polygon></svg> },
-        { title: 'Tracker', page: 'tracker-hub', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg> },
-        { title: 'Toolkit', page: 'toolkit', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path></svg> },
-        { title: 'Media', page: 'media', icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className="card-icon"><circle cx="12" cy="12" r="10"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg> },
-    ];
-
-    return (
-        <div className="page-container">
-            <InstallBanner />
-            <ProfileMenu isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} onNavigate={onNavigate} />
-
-            <header className="app-header">
-                <div className="header-content">
-                    <h1 className="welcome-message">Welcome, {username}!</h1>
-                    <p className="app-subtitle">Your Journey, Your Tools.</p>
-                </div>
-                 <button className="hamburger-menu" onClick={() => setIsMenuOpen(true)} aria-label="Open menu">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
-                </button>
-            </header>
-
-            <main className="home-main">
-                <SobrietyClock size="large" onNavigate={onNavigate} />
-                <div className="card-grid home-grid">
-                    {homeCards.map((card) => (
-                        <button
-                            key={card.page}
-                            className="card"
-                            onClick={() => onNavigate(card.page)}
-                            aria-label={card.title}
-                        >
-                            {card.icon}
-                            <h2 className="card-title">{card.title}</h2>
-                        </button>
-                    ))}
-                </div>
-            </main>
-
-            <footer className="app-footer">
-                <a href="https://www.yourjourneyyourtools.com" target="_blank" rel="noopener noreferrer">
-                    www.yourjourneyyourtools.com
-                </a>
-            </footer>
-        </div>
+                        );
+                    }
+                    return null;
+                })}
+            </aside>
+        </>
     );
 };
 
 
 // --- Main App Component ---
 const App = () => {
-    const [page, setPage] = useState('home');
-    const [pageParams, setPageParams] = useState(null);
     const [isLoggedIn, setIsLoggedIn] = useState(false);
-    const [username, setUsername] = useState('There');
-    const [isOffline, setIsOffline] = useState(!navigator.onLine);
+    const [currentPage, setCurrentPage] = useState('home');
+    const [pinnedTools, setPinnedTools] = useState<string[]>([]);
+    const [userProfile, setUserProfile] = useState({ username: 'User' });
+    const [lastUseDate, setLastUseDate] = useState<string | null>(null);
+    const [unlockedAchievements, setUnlockedAchievements] = useState<string[]>([]);
+    const [toastQueue, setToastQueue] = useState<{ id: string, title: string, icon: string }[]>([]);
+    const [isMenuOpen, setIsMenuOpen] = useState(false);
+    const [installPromptEvent, setInstallPromptEvent] = useState<any>(null);
 
     useEffect(() => {
-        // Load username
-        const storedProfile = localStorage.getItem('userProfile');
-        if (storedProfile) {
-            try {
-                setUsername(JSON.parse(storedProfile).username || 'There');
-            } catch(e) { console.error("Could not parse user profile on load", e)}
-        }
-        
-        // Handle online/offline status
-        const handleOnline = () => setIsOffline(false);
-        const handleOffline = () => setIsOffline(true);
-
-        window.addEventListener('online', handleOnline);
-        window.addEventListener('offline', handleOffline);
-
-        return () => {
-            window.removeEventListener('online', handleOnline);
-            window.removeEventListener('offline', handleOffline);
+        const handleBeforeInstallPrompt = (e: Event) => {
+            e.preventDefault();
+            setInstallPromptEvent(e);
         };
-    }, [isLoggedIn]); // Re-check username when logged in
-    
-     useEffect(() => {
-        // Service Worker for Reminders and Offline Capability
-        if ('serviceWorker' in navigator && 'PeriodicSyncManager' in window.ServiceWorkerRegistration.prototype) {
-            navigator.serviceWorker.register('/service-worker.js')
-                .then(registration => {
-                    console.log('Service Worker registered with scope:', registration.scope);
-                    return registration.periodicSync.register('daily-reminder', {
-                        minInterval: 24 * 60 * 60 * 1000,
-                    });
-                })
-                .catch(error => console.log('Service Worker registration or periodic sync failed:', error));
-        } else if ('serviceWorker' in navigator) {
-             navigator.serviceWorker.register('/service-worker.js')
-                .then(registration => console.log('Service Worker registered with scope:', registration.scope))
-                .catch(error => console.log('Service Worker registration failed:', error));
+        window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+        return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    }, []);
+
+    const handleInstallClick = async () => {
+        if (!installPromptEvent) {
+            return;
+        }
+        installPromptEvent.prompt();
+        await installPromptEvent.userChoice;
+        setInstallPromptEvent(null);
+    };
+
+    const checkAchievements = useCallback(() => {
+        const data = {
+            journalHistory: JSON.parse(localStorage.getItem('journalHistory') || '[]'),
+            cravingsHistory: JSON.parse(localStorage.getItem('cravingsHistory') || '[]'),
+            breathingHistory: JSON.parse(localStorage.getItem('breathingHistory') || '[]'),
+            groundingHistory: JSON.parse(localStorage.getItem('groundingHistory') || '[]'),
+            valuesHistory: JSON.parse(localStorage.getItem('valuesHistory') || '[]'),
+            safetyPlan: JSON.parse(localStorage.getItem('safetyPlan') || '{}'),
+            relapsePreventionPlan: JSON.parse(localStorage.getItem('relapsePreventionPlan') || '{}'),
+            goals: JSON.parse(localStorage.getItem('goals') || '[]'),
+            lastUseDate: localStorage.getItem('lastUseDate'),
+            loginHistory: JSON.parse(localStorage.getItem('loginHistory') || '[]'),
+            userProfile: JSON.parse(localStorage.getItem('userProfile') || '{}'),
+            events: JSON.parse(localStorage.getItem('eventHistory') || '[]'),
+            auditHistory: JSON.parse(localStorage.getItem('auditHistory') || '[]'),
+            adhdHistory: JSON.parse(localStorage.getItem('adhdHistory') || '[]'),
+            gratitudeHistory: JSON.parse(localStorage.getItem('gratitudeHistory') || '[]'),
+            thoughtDiaryHistory: JSON.parse(localStorage.getItem('thoughtDiaryHistory') || '[]'),
+            meditationHistory: JSON.parse(localStorage.getItem('meditationHistory') || '[]'),
+            unlockedAchievements: JSON.parse(localStorage.getItem('unlockedAchievements') || '[]')
+        };
+
+        const currentUnlocked = JSON.parse(localStorage.getItem('unlockedAchievements') || '[]') as string[];
+        const newlyUnlocked = [];
+
+        for (const key in ACHIEVEMENTS_DEFINITIONS) {
+            if (!currentUnlocked.includes(key)) {
+                if (ACHIEVEMENTS_DEFINITIONS[key as keyof typeof ACHIEVEMENTS_DEFINITIONS].check(data)) {
+                    newlyUnlocked.push(key);
+                }
+            }
+        }
+
+        if (newlyUnlocked.length > 0) {
+            const updatedUnlocked = [...currentUnlocked, ...newlyUnlocked];
+            localStorage.setItem('unlockedAchievements', JSON.stringify(updatedUnlocked));
+            setUnlockedAchievements(updatedUnlocked);
+
+            // Add new achievements to toast queue
+            const newToasts = newlyUnlocked.map(key => ({
+                id: key,
+                title: ACHIEVEMENTS_DEFINITIONS[key as keyof typeof ACHIEVEMENTS_DEFINITIONS].title,
+                icon: ACHIEVEMENTS_DEFINITIONS[key as keyof typeof ACHIEVEMENTS_DEFINITIONS].icon,
+            }));
+            setToastQueue(prev => [...prev, ...newToasts]);
         }
     }, []);
 
-    const handleNavigation = (targetPage: string, params: any = null) => {
-        setPage(targetPage);
-        setPageParams(params);
-        window.scrollTo(0, 0); // Scroll to top on page change
-        trackEvent('navigate', 'Navigation', targetPage);
-    };
+    useEffect(() => {
+        window.addEventListener('app:action', checkAchievements);
+        return () => window.removeEventListener('app:action', checkAchievements);
+    }, [checkAchievements]);
 
-    if (!isLoggedIn) {
-        return <LoginPage onLoginSuccess={() => setIsLoggedIn(true)} />;
-    }
+    useEffect(() => {
+        const storedPin = localStorage.getItem('userPIN');
+        if (!storedPin) {
+            setIsLoggedIn(false); // Force to login/setup screen
+        }
 
-    const renderPage = () => {
-        switch (page) {
-            case 'tracker-hub':
-                return <TrackerHubPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
-            case 'tracker':
-                return <TrackerPage onBack={() => handleNavigation('tracker-hub')} />;
-            case 'cravings-tracker':
-                return <CravingsTrackerPage onBack={() => handleNavigation('tracker-hub')} />;
-            case 'toolkit':
-                 return <ToolkitPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
-            case 'values-exercise':
-                return <ValuesExercisePage onBack={() => handleNavigation('toolkit')} initialStep={pageParams?.initialStep || 'deck-selection'} />;
-            case 'audit-test':
-                return <AuditTestPage onBack={() => handleNavigation('toolkit')} />;
-            case 'three-good-things':
-                return <ThreeGoodThingsPage onBack={() => handleNavigation('toolkit')} />;
-            case 'wind-down-toolkit':
-                return <WindDownToolkitPage onBack={() => handleNavigation('toolkit')} />;
-            case 'thought-triangle':
-                return <ThoughtTrianglePage onBack={() => handleNavigation('toolkit')} />;
-            case 'media':
-                return <MediaPage onBack={() => handleNavigation('home')} />;
-            case 'five-four-three-two-one':
-                return <FiveFourThreeTwoOnePage onBack={() => handleNavigation('toolkit')} onHome={() => handleNavigation('home')} />;
-            case 'breathing-exercise':
-                return <BreathingExercisePage onBack={() => handleNavigation('toolkit')} onHome={() => handleNavigation('home')} />;
-            case 'guided-audio':
-                return <GuidedAudioPage onBack={() => handleNavigation('toolkit')} onHome={() => handleNavigation('home')}/>;
-            case 'journey':
-                 return <JourneyPage onBack={() => handleNavigation('home')} onNavigate={handleNavigation} />;
-            case 'goals':
-                return <GoalsPage onBack={() => handleNavigation('tracker-hub')} onNavigate={handleNavigation} />;
-            case 'known-bugs':
-                return <KnownBugsPage onBack={() => handleNavigation('home')} />;
-            case 'data-privacy':
-                return <DataPrivacyPage onBack={() => handleNavigation('home')} />;
-            case 'profile':
-                return <ProfilePage onBack={() => handleNavigation('home')} />;
-            case 'history':
-                return <HistoryPage onBack={() => handleNavigation('home')} />;
-            default:
-                return <HomePage onNavigate={handleNavigation} username={username} />;
+        const storedPins = JSON.parse(localStorage.getItem('pinnedTools') || '["journal", "breathing", "cravings", "goals"]');
+        setPinnedTools(storedPins);
+
+        const storedProfile = JSON.parse(localStorage.getItem('userProfile') || '{}');
+        if (storedProfile.username) {
+            setUserProfile(storedProfile);
+        }
+
+        const storedLastUse = localStorage.getItem('lastUseDate');
+        setLastUseDate(storedLastUse);
+
+        const storedAchievements = JSON.parse(localStorage.getItem('unlockedAchievements') || '[]');
+        setUnlockedAchievements(storedAchievements);
+        checkAchievements();
+
+        // Track logins for achievements
+        const loginHistory = JSON.parse(localStorage.getItem('loginHistory') || '[]') as string[];
+        const today = new Date().toISOString();
+        if (!loginHistory.some(d => new Date(d).toDateString() === new Date(today).toDateString())) {
+            loginHistory.push(today);
+            localStorage.setItem('loginHistory', JSON.stringify(loginHistory));
+        }
+
+    }, [checkAchievements]);
+
+    const handleLoginSuccess = () => {
+        setIsLoggedIn(true);
+        const storedProfile = JSON.parse(localStorage.getItem('userProfile') || '{}');
+        if (storedProfile.username) {
+            setUserProfile(storedProfile);
         }
     };
 
+    const navigate = (page: string) => {
+        setCurrentPage(page);
+        window.scrollTo(0, 0); // Scroll to top on page change
+    };
+
+    const togglePin = (toolId: string) => {
+        setPinnedTools(prev => {
+            const newPinned = prev.includes(toolId)
+                ? prev.filter(id => id !== toolId)
+                : [...prev, toolId];
+            localStorage.setItem('pinnedTools', JSON.stringify(newPinned));
+            return newPinned;
+        });
+    };
+
+    const handleProfileUpdate = (e: CustomEvent) => {
+        setUserProfile(e.detail);
+    };
+
+    useEffect(() => {
+        window.addEventListener('app:profile_updated', handleProfileUpdate as EventListener);
+        return () => window.removeEventListener('app:profile_updated', handleProfileUpdate as EventListener);
+    }, []);
+
+    const renderPage = () => {
+        switch (currentPage) {
+            case 'home':
+                return <HomePage userProfile={userProfile} pinnedTools={pinnedTools} togglePin={togglePin} lastUseDate={lastUseDate} navigate={navigate} />;
+            case 'tools':
+                return <ToolsPage navigate={navigate} pinnedTools={pinnedTools} togglePin={togglePin} />;
+            case 'journal':
+                return <JournalPage navigate={navigate} />;
+            case 'audit':
+                 return <AuditPage navigate={navigate} />;
+            case 'adhd':
+                return <ADHDPage navigate={navigate} />;
+            case 'profile':
+                return <ProfilePage navigate={navigate} />;
+            case 'privacy':
+                return <PrivacyPage navigate={navigate} />;
+            case 'gratitude':
+                return <GratitudeLogPage navigate={navigate} />;
+            case 'thought-diary':
+                return <ThoughtDiaryPage navigate={navigate} />;
+            case 'safety-plan':
+                return <SafetyPlanPage navigate={navigate} />;
+            case 'relapse-prevention':
+                return <RelapsePreventionPage navigate={navigate} />;
+            case 'cravings':
+                return <CravingsPage navigate={navigate} />;
+            case 'breathing':
+                return <BreathingPage navigate={navigate} />;
+            case 'grounding':
+                return <GroundingPage navigate={navigate} />;
+            case 'values-exercise':
+                return <ValuesExercisePage navigate={navigate} />;
+            case 'meditation':
+                return <GuidedMeditationPage navigate={navigate} />;
+            case 'goals':
+                return <GoalsPage navigate={navigate} />;
+            case 'achievements':
+                return <AchievementsPage navigate={navigate} />;
+            case 'journey':
+                 return <JourneyPage navigate={navigate} unlockedAchievements={unlockedAchievements} />;
+            default:
+                return <HomePage userProfile={userProfile} pinnedTools={pinnedTools} togglePin={togglePin} lastUseDate={lastUseDate} navigate={navigate} />;
+        }
+    };
+    
+    if (!isLoggedIn) {
+        return <LoginPage onLoginSuccess={handleLoginSuccess} />;
+    }
+
     return (
         <div className="app-container">
-            {isOffline && (
-                <div className="offline-indicator">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 16.5a13.2 13.2 0 0 1 13 0"/><path d="M2.5 13.5a17.4 17.4 0 0 1 19 0"/><path d="M8.5 19.5a8.7 8.7 0 0 1 7 0"/><path d="M12 22.5a2.6 2.6 0 0 1 0-5 2.6 2.6 0 0 1 0 5z"/><path d="M2 8l9.3-6.5a1 1 0 0 1 1.4 0L22 8"/><path d="M17 8v1.3"/><path d="M20 11v1.3"/><path d="M7 8v1.3"/><path d="M4 11v1.3"/></svg>
-                    <span>You are currently offline. Some features may be limited.</span>
-                </div>
+            {toastQueue.length > 0 && (
+                <Toast
+                    key={toastQueue[0].id}
+                    message={toastQueue[0].title}
+                    icon={toastQueue[0].icon}
+                    onClose={() => setToastQueue(prev => prev.slice(1))}
+                />
             )}
+            <ProfileMenu
+                isOpen={isMenuOpen}
+                onClose={() => setIsMenuOpen(false)}
+                navigate={navigate}
+                installPromptEvent={installPromptEvent}
+                onInstallClick={handleInstallClick}
+            />
             {renderPage()}
+            <BottomNavBar currentPage={currentPage} navigate={navigate} onMenuClick={() => setIsMenuOpen(true)} />
         </div>
     );
 };
@@ -4142,9 +4184,15 @@ const App = () => {
 const container = document.getElementById('root');
 if (container) {
     const root = createRoot(container);
-    root.render(
-        <React.StrictMode>
-            <App />
-        </React.StrictMode>
-    );
+    root.render(<App />);
+}
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/service-worker.js').then(registration => {
+      console.log('ServiceWorker registration successful with scope: ', registration.scope);
+    }, err => {
+      console.log('ServiceWorker registration failed: ', err);
+    });
+  });
 }
