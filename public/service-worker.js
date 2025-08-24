@@ -3,10 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-const CACHE_NAME = 'your-journey-your-tools-v2';
+const CACHE_NAME = 'your-journey-your-tools-v3';
 // Add any other static assets that need to be cached for offline use.
-// Note: Caching dynamic imports from esm.sh is complex and not recommended
-// for a simple service worker. The browser's HTTP cache is more suitable.
 const urlsToCache = [
   '/',
   '/index.html',
@@ -19,7 +17,12 @@ const urlsToCache = [
   '/assets/icon-152x152.png',
   '/assets/icon-192x192.png',
   '/assets/icon-384x384.png',
-  '/assets/icon-512x512.png'
+  '/assets/icon-512x512.png',
+  // Precaching external dependencies for robust offline support
+  'https://esm.sh/react@18.2.0',
+  'https://esm.sh/react-dom@18.2.0/client',
+  'https://esm.sh/@google/genai@1.15.0',
+  'https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap'
 ];
 
 // Install event: opens a cache and adds the app shell files to it.
@@ -28,7 +31,10 @@ self.addEventListener('install', event => {
     caches.open(CACHE_NAME)
       .then(cache => {
         console.log('Opened cache');
-        return cache.addAll(urlsToCache);
+        // Use a request with no-cors mode for external resources to be safe,
+        // although esm.sh and googleapis should have CORS headers.
+        const requests = urlsToCache.map(url => new Request(url, { mode: 'no-cors' }));
+        return cache.addAll(requests);
       })
       .catch(err => {
         console.error('Failed to cache app shell', err);
@@ -40,7 +46,7 @@ self.addEventListener('install', event => {
 // If a request is not in the cache, it's fetched from the network,
 // cached, and then returned to the application.
 self.addEventListener('fetch', event => {
-  // We only want to cache GET requests.
+  // We only want to handle GET requests.
   if (event.request.method !== 'GET') {
     return;
   }
@@ -58,6 +64,11 @@ self.addEventListener('fetch', event => {
           networkResponse => {
             // Check if we received a valid response.
             if (!networkResponse || networkResponse.status !== 200) {
+              return networkResponse;
+            }
+
+            // We don't cache opaque responses to avoid filling cache with errors
+            if (networkResponse.type === 'opaque') {
               return networkResponse;
             }
 
