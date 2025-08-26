@@ -18,14 +18,6 @@ declare global {
             select: (props: string[], opts: { multiple: boolean }) => Promise<any[]>;
         };
     }
-    interface ServiceWorkerRegistration {
-        readonly periodicSync: PeriodicSyncManager;
-    }
-    interface PeriodicSyncManager {
-        register(tag: string, options?: { minInterval: number }): Promise<void>;
-        unregister(tag: string): Promise<void>;
-        getTags(): Promise<string[]>;
-    }
 }
 
 // --- Achievement Definitions ---
@@ -60,15 +52,6 @@ const ACHIEVEMENTS_DEFINITIONS = {
         });
         return moodGroups.size >= 6;
     }},
-    // Sobriety
-    'sober_1_day': { title: 'Day One', description: 'Achieve 24 hours of sobriety.', icon: '☀️', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 86400000 },
-    'sober_3_days': { title: 'Three Days', description: 'Achieve 3 days of sobriety.', icon: '🥉', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 3 * 86400000 },
-    'sober_1_week': { title: 'One Week', description: 'Achieve 1 week of sobriety.', icon: '🥈', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 7 * 86400000 },
-    'sober_2_weeks': { title: 'Two Weeks', description: 'Achieve 2 weeks of sobriety.', icon: '🏅', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 14 * 86400000 },
-    'sober_1_month': { title: 'One Month', description: 'Achieve 1 month of sobriety.', icon: '🥇', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 30 * 86400000 },
-    'sober_3_months': { title: 'Three Months', description: 'Achieve 3 months of sobriety.', icon: '🏆', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 90 * 86400000 },
-    'sober_6_months': { title: 'Six Months', description: 'Achieve 6 months of sobriety.', icon: '💎', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 182 * 86400000 },
-    'sober_1_year': { title: 'One Year!', description: 'Achieve a full year of sobriety.', icon: '🎉', check: ({ lastUseDate }: { lastUseDate?: string | null }) => lastUseDate && (new Date().getTime() - new Date(lastUseDate).getTime()) >= 365 * 86400000 },
     // Cravings
     'craving_1': { title: 'First Craving Logged', description: 'Log your first craving.', icon: '📈', check: ({ cravingsHistory }: { cravingsHistory: any[] }) => cravingsHistory.length >= 1 },
     'craving_10': { title: 'Craving Analyst', description: 'Log 10 cravings.', icon: '📊', check: ({ cravingsHistory }: { cravingsHistory: any[] }) => cravingsHistory.length >= 10 },
@@ -86,7 +69,6 @@ const ACHIEVEMENTS_DEFINITIONS = {
     'tool_relapse_plan_start': { title: 'Prevention Planner', description: 'Start your Relapse Prevention Plan.', icon: '🛤️', check: ({ relapsePreventionPlan }: { relapsePreventionPlan: object }) => Object.keys(relapsePreventionPlan).length > 0 },
     'tool_relapse_plan_full': { title: 'Forward Thinker', description: 'Fill out every section of the Relapse Prevention Plan.', icon: '🗺️', check: ({ relapsePreventionPlan }: { relapsePreventionPlan: { [key: string]: any } }) => Object.values(relapsePreventionPlan).filter(v => (Array.isArray(v) ? v.length > 0 : !!v)).length >= 4 },
     'tool_goal_setter': { title: 'Goal Setter', description: 'Create your first S.M.A.R.T. goal.', icon: '🎯', check: ({ goals }: { goals: any[] }) => goals.length >= 1 },
-    'tool_know_drugs': { title: 'Educational Explorer', description: 'Visit the "Know Your Drugs" educational playlist.', icon: '🎓', check: ({ events }: { events: string[] }) => events.includes('know_your_drugs') },
     'tool_audit_1': { title: 'Self-Reflection', description: 'Complete the AUDIT screener for the first time.', icon: '🔍', check: ({ auditHistory }: { auditHistory: any[] }) => auditHistory.length >= 1 },
     'tool_audit_2': { title: 'Check-in', description: 'Complete the AUDIT screener more than once.', icon: '🔄', check: ({ auditHistory }: { auditHistory: any[] }) => auditHistory.length >= 2 },
     'tool_adhd_1': { title: 'Insight Seeker', description: 'Complete the ADHD screener for the first time.', icon: '💡', check: ({ adhdHistory }: { adhdHistory: any[] }) => adhdHistory.length >= 1 },
@@ -221,15 +203,6 @@ const ALL_TOOLS = [
         icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4C9.24 4 7 6.24 7 9c0 2.24 1.76 4.09 4 4.43V19h2v-5.57c2.24-.34 4-2.19 4-4.43 0-2.76-2.24-5-5-5zm-3.5 5c-.83 0-1.5-.67-1.5-1.5S7.67 6 8.5 6s1.5.67 1.5 1.5S9.33 9 8.5 9zm3.5 2c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.5-2c-.83 0-1.5-.67-1.5-1.5S14.67 6 15.5 6s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>,
         navigate: 'adhd',
         category: 'Exercises',
-    },
-    {
-        id: 'know-your-drugs',
-        title: 'Know Your Drugs',
-        subtitle: 'Educational video playlist',
-        icon: <svg className="card-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.11 0-2 .89-2 2v12c0 1.1.89 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.11-.9-2-2-2zm0 14H3V5h18v12zm-5-6l-7 4V7l7 4z"/></svg>,
-        navigate: 'https://www.youtube.com/playlist?list=PL1MHtsikpzrlXgHVnVD2txdA2weD0xDFX',
-        category: 'Exercises',
-        external: true,
     },
     {
         id: 'goals',
@@ -706,56 +679,11 @@ const JournalPage = ({ navigate }) => {
     const [showConfirmation, setShowConfirmation] = useState(false);
     const [showMoodSelector, setShowMoodSelector] = useState(false);
     const [selectedMoodGroup, setSelectedMoodGroup] = useState<keyof typeof moodGroups | null>(null);
-    const [isReminderEnabled, setIsReminderEnabled] = useState(false);
 
     useEffect(() => {
         const storedHistory = JSON.parse(localStorage.getItem('journalHistory') || '[]');
         setHistory(storedHistory.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()));
-        const reminderStatus = localStorage.getItem('journalReminderEnabled') === 'true';
-        setIsReminderEnabled(reminderStatus);
     }, []);
-    
-    const handleReminderToggle = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const isEnabled = e.target.checked;
-        
-        if (!('serviceWorker' in navigator) || !('Notification' in window) || (window.ServiceWorkerRegistration && !('periodicSync' in window.ServiceWorkerRegistration.prototype))) {
-            alert('Your browser does not support notifications or background sync, so reminders cannot be set.');
-            return;
-        }
-
-        setIsReminderEnabled(isEnabled);
-        localStorage.setItem('journalReminderEnabled', String(isEnabled));
-
-        const registration = await navigator.serviceWorker.ready;
-
-        if (isEnabled) {
-            const permission = await Notification.requestPermission();
-            if (permission === 'granted') {
-                try {
-                    await registration.periodicSync.register('journal-reminder', {
-                        minInterval: 24 * 60 * 60 * 1000, // 24 hours
-                    });
-                    console.log('Periodic sync registered for journal reminder.');
-                } catch (error) {
-                    console.error('Periodic sync could not be registered:', error);
-                    alert('Failed to set up the reminder.');
-                    setIsReminderEnabled(false);
-                    localStorage.setItem('journalReminderEnabled', 'false');
-                }
-            } else {
-                alert('Notification permission was denied. Reminders cannot be set.');
-                setIsReminderEnabled(false);
-                localStorage.setItem('journalReminderEnabled', 'false');
-            }
-        } else {
-            try {
-                await registration.periodicSync.unregister('journal-reminder');
-                console.log('Periodic sync unregistered for journal reminder.');
-            } catch (error) {
-                console.error('Periodic sync could not be unregistered:', error);
-            }
-        }
-    };
     
     const handleFeelingSearchChange = (e) => {
         const value = e.target.value;
@@ -948,24 +876,6 @@ const JournalPage = ({ navigate }) => {
                     <button type="submit" className="log-button" disabled={isLogButtonDisabled} style={{marginTop: '1rem'}}>Log Entry</button>
                     {showConfirmation && <p className="confirmation-message">Entry Logged Successfully!</p>}
                 </form>
-                
-                <div className="card reminder-section no-hover">
-                    <div className="form-section-title">
-                        <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
-                        <h3>Daily Journal Reminder</h3>
-                    </div>
-                    <div className="reminder-toggle">
-                        <span>Set a daily reminder to log your entry?</span>
-                        <label className="toggle-switch">
-                            <input
-                                type="checkbox"
-                                checked={isReminderEnabled}
-                                onChange={handleReminderToggle}
-                            />
-                            <span className="toggle-label"></span>
-                        </label>
-                    </div>
-                </div>
 
                 <section className="history-section">
                     <hr className="history-divider" />
@@ -1040,7 +950,54 @@ const JournalPage = ({ navigate }) => {
 };
 
 // --- HomePage Component ---
-const HomePage = ({ userProfile, pinnedTools, togglePin, lastUseDate, navigate }) => {
+const HomePage = ({ userProfile, pinnedTools, togglePin, navigate }) => {
+    const [lastUseDate, setLastUseDate] = useState<Date | null>(null);
+    const [soberTime, setSoberTime] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 });
+
+    useEffect(() => {
+        const loadLastUseDate = () => {
+            const journalHistory: JournalHistoryEntry[] = JSON.parse(localStorage.getItem('journalHistory') || '[]');
+            if (journalHistory.length > 0) {
+                const sortedHistory = [...journalHistory].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                setLastUseDate(new Date(sortedHistory[0].date));
+            } else {
+                setLastUseDate(null);
+            }
+        };
+
+        loadLastUseDate();
+        
+        window.addEventListener('app:action', loadLastUseDate);
+        
+        return () => {
+            window.removeEventListener('app:action', loadLastUseDate);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!lastUseDate) {
+            setSoberTime({ days: 0, hours: 0, minutes: 0, seconds: 0 });
+            return;
+        }
+
+        const intervalId = setInterval(() => {
+            const now = new Date().getTime();
+            const lastUseTime = lastUseDate.getTime();
+            const diff = now - lastUseTime;
+
+            if (diff < 0) return;
+
+            const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+            const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+
+            setSoberTime({ days, hours, minutes, seconds });
+        }, 1000);
+
+        return () => clearInterval(intervalId);
+    }, [lastUseDate]);
+
     return (
         <div className="page-container">
             <header className="app-header">
@@ -1051,8 +1008,39 @@ const HomePage = ({ userProfile, pinnedTools, togglePin, lastUseDate, navigate }
             </header>
             <main>
                 <section>
-                     <SoberClock lastUseDate={lastUseDate} />
+                    <h2 className="section-title">My Progress</h2>
+                    <div className="card no-hover sober-clock-card">
+                        <h3 className="card-title" style={{marginBottom: 0}}>Time Sober</h3>
+                        {lastUseDate ? (
+                            <div className="sober-clock-container">
+                                <div className="time-segment">
+                                    <span className="time-value">{soberTime.days}</span>
+                                    <span className="time-label">Days</span>
+                                </div>
+                                <div className="time-segment">
+                                    <span className="time-value">{String(soberTime.hours).padStart(2, '0')}</span>
+                                    <span className="time-label">Hours</span>
+                                </div>
+                                <div className="time-segment">
+                                    <span className="time-value">{String(soberTime.minutes).padStart(2, '0')}</span>
+                                    <span className="time-label">Minutes</span>
+                                </div>
+                                <div className="time-segment">
+                                    <span className="time-value">{String(soberTime.seconds).padStart(2, '0')}</span>
+                                    <span className="time-label">Seconds</span>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="sober-clock-prompt">
+                                <p>Log your last use in the Daily Journal to start the clock.</p>
+                                <button className="dashboard-card-cta" style={{marginTop: '1rem'}} onClick={() => navigate('journal')}>
+                                    Go to Journal
+                                </button>
+                            </div>
+                        )}
+                    </div>
                 </section>
+
                 <section>
                     <h2 className="section-title">My Pinned Tools</h2>
                     {pinnedTools.length > 0 ? (
@@ -1077,10 +1065,6 @@ const ToolCard = ({ tool, navigate, isPinned, togglePin }) => {
     const handleClick = () => {
         if (tool.external) {
             window.open(tool.navigate, '_blank');
-            if (tool.id === 'know-your-drugs') {
-                 localStorage.setItem('eventHistory', JSON.stringify([...JSON.parse(localStorage.getItem('eventHistory') || '[]'), 'know_your_drugs']));
-                 window.dispatchEvent(new Event('app:action'));
-            }
         } else {
             navigate(tool.navigate);
         }
@@ -1144,61 +1128,6 @@ const ToolsPage = ({ navigate, pinnedTools, togglePin }) => {
     );
 };
 
-
-// --- SoberClock Component ---
-const SoberClock = ({ lastUseDate }) => {
-    const calculateTimeSober = useCallback(() => {
-        if (!lastUseDate) return null;
-        const diff = new Date().getTime() - new Date(lastUseDate).getTime();
-        if (diff < 0) return { days: 0, hours: 0, minutes: 0, seconds: 0 };
-
-        const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-        const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-        const minutes = Math.floor((diff / 1000 / 60) % 60);
-        const seconds = Math.floor((diff / 1000) % 60);
-        return { days, hours, minutes, seconds };
-    }, [lastUseDate]);
-
-    const [timeSober, setTimeSober] = useState(calculateTimeSober());
-
-    useEffect(() => {
-        if (!lastUseDate) return;
-        const timer = setInterval(() => {
-            setTimeSober(calculateTimeSober());
-        }, 1000);
-        return () => clearInterval(timer);
-    }, [lastUseDate, calculateTimeSober]);
-
-    return (
-        <div className="card no-hover sober-clock-card">
-            <h3 className="section-title" style={{ marginTop: 0, textAlign: 'center' }}>Time Sober</h3>
-            {timeSober ? (
-                <div className="sober-clock-container">
-                    <div className="time-segment">
-                        <span className="time-value">{timeSober.days}</span>
-                        <span className="time-label">Days</span>
-                    </div>
-                    <div className="time-segment">
-                        <span className="time-value">{String(timeSober.hours).padStart(2, '0')}</span>
-                        <span className="time-label">Hours</span>
-                    </div>
-                    <div className="time-segment">
-                        <span className="time-value">{String(timeSober.minutes).padStart(2, '0')}</span>
-                        <span className="time-label">Mins</span>
-                    </div>
-                    <div className="time-segment">
-                        <span className="time-value">{String(timeSober.seconds).padStart(2, '0')}</span>
-                        <span className="time-label">Secs</span>
-                    </div>
-                </div>
-            ) : (
-                <div className="sober-clock-prompt">
-                    <p>Log your last use in the Daily Journal to start the clock and track your progress!</p>
-                </div>
-            )}
-        </div>
-    );
-};
 
 // --- Profile Page Component ---
 const ProfilePage = ({ navigate }) => {
@@ -3969,7 +3898,6 @@ const App = () => {
     const [currentPage, setCurrentPage] = useState('home');
     const [pinnedTools, setPinnedTools] = useState<string[]>([]);
     const [userProfile, setUserProfile] = useState({ username: 'User' });
-    const [lastUseDate, setLastUseDate] = useState<string | null>(null);
     const [unlockedAchievements, setUnlockedAchievements] = useState<string[]>([]);
     const [toastQueue, setToastQueue] = useState<{ id: string, title: string, icon: string }[]>([]);
     const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -4003,7 +3931,6 @@ const App = () => {
             safetyPlan: JSON.parse(localStorage.getItem('safetyPlan') || '{}'),
             relapsePreventionPlan: JSON.parse(localStorage.getItem('relapsePreventionPlan') || '{}'),
             goals: JSON.parse(localStorage.getItem('goals') || '[]'),
-            lastUseDate: localStorage.getItem('lastUseDate'),
             loginHistory: JSON.parse(localStorage.getItem('loginHistory') || '[]'),
             userProfile: JSON.parse(localStorage.getItem('userProfile') || '{}'),
             events: JSON.parse(localStorage.getItem('eventHistory') || '[]'),
@@ -4060,9 +3987,6 @@ const App = () => {
             setUserProfile(storedProfile);
         }
 
-        const storedLastUse = localStorage.getItem('lastUseDate');
-        setLastUseDate(storedLastUse);
-
         const storedAchievements = JSON.parse(localStorage.getItem('unlockedAchievements') || '[]');
         setUnlockedAchievements(storedAchievements);
         checkAchievements();
@@ -4112,7 +4036,7 @@ const App = () => {
     const renderPage = () => {
         switch (currentPage) {
             case 'home':
-                return <HomePage userProfile={userProfile} pinnedTools={pinnedTools} togglePin={togglePin} lastUseDate={lastUseDate} navigate={navigate} />;
+                return <HomePage userProfile={userProfile} pinnedTools={pinnedTools} togglePin={togglePin} navigate={navigate} />;
             case 'tools':
                 return <ToolsPage navigate={navigate} pinnedTools={pinnedTools} togglePin={togglePin} />;
             case 'journal':
@@ -4150,7 +4074,7 @@ const App = () => {
             case 'journey':
                  return <JourneyPage navigate={navigate} unlockedAchievements={unlockedAchievements} />;
             default:
-                return <HomePage userProfile={userProfile} pinnedTools={pinnedTools} togglePin={togglePin} lastUseDate={lastUseDate} navigate={navigate} />;
+                return <HomePage userProfile={userProfile} pinnedTools={pinnedTools} togglePin={togglePin} navigate={navigate} />;
         }
     };
     
