@@ -138,10 +138,6 @@ export const JourneyPage = ({ navigate, unlockedAchievements }: { navigate: (pag
                             <span className="achievement-summary-total">/ {Object.keys(ACHIEVEMENTS_DEFINITIONS).length}</span>
                         </div>
                     </div>
-
-                    <ul className="tool-summary-list">
-                        {ALL_TOOLS.map(tool => renderToolSummaryItem(tool))}
-                    </ul>
                 </section>
                 
                 <section>
@@ -168,6 +164,13 @@ export const JourneyPage = ({ navigate, unlockedAchievements }: { navigate: (pag
                             )}
                         </div>
                     </div>
+                </section>
+
+                <section>
+                    <h2 className="section-title">Tool Usage</h2>
+                    <ul className="tool-summary-list">
+                        {ALL_TOOLS.map(tool => renderToolSummaryItem(tool))}
+                    </ul>
                 </section>
             </main>
         </div>
