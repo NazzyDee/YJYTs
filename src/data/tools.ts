@@ -1,0 +1,138 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import React from 'react';
+
+// --- Single Source of Truth for All Tools ---
+export const ALL_TOOLS = [
+    {
+        id: 'journal',
+        title: 'Daily Journal',
+        subtitle: 'Log mood and substance use',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 14h-8v-2h8v2zm0-4h-8v-2h8v2zM13 9V3.5L18.5 9H13z" })),
+        navigate: 'journal',
+        category: 'Trackers',
+    },
+    {
+        id: 'gratitude',
+        title: 'Gratitude Log',
+        subtitle: 'Record things you are thankful for',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" })),
+        navigate: 'gratitude',
+        category: 'Trackers',
+    },
+    {
+        id: 'cravings',
+        title: 'Craving Tracker',
+        subtitle: 'Monitor and manage cravings',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z" })),
+        navigate: 'cravings',
+        category: 'Trackers',
+    },
+    {
+        id: 'breathing',
+        title: 'Breathing',
+        subtitle: 'Calm your mind and body',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M2 6c4-4 12 4 18 0v2c-6-4-14 4-18 0V6zm0 6c4-4 12 4 18 0v2c-6-4-14 4-18 0v-2zm0 6c4-4 12 4 18 0v2c-6-4-14 4-18 0v-2z" })),
+        navigate: 'breathing',
+        category: 'Exercises',
+    },
+    {
+        id: 'meditation',
+        title: 'Guided Meditation',
+        subtitle: 'Audio exercises for mindfulness',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" })),
+        navigate: 'meditation',
+        category: 'Exercises',
+    },
+    {
+        id: 'grounding',
+        title: '5-4-3-2-1',
+        subtitle: 'Grounding technique',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5C21.27 7.61 17 4.5 12 4.5zm0 12c-2.48 0-4.5-2.02-4.5-4.5S9.52 7.5 12 7.5s4.5 2.02 4.5 4.5-2.02 4.5-4.5 4.5zm0-7C10.62 9.5 9.5 10.62 9.5 12s1.12 2.5 2.5 2.5 2.5-1.12 2.5-2.5S13.38 9.5 12 9.5z" })),
+        navigate: 'grounding',
+        category: 'Exercises',
+    },
+    {
+        id: 'thought-diary',
+        title: 'Thought Diary',
+        subtitle: 'CBT-based thought reframing',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M20 2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4V4c0-1.1-.9-2-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z" })),
+        navigate: 'thought-diary',
+        category: 'Exercises',
+    },
+    {
+        id: 'opposite-action',
+        title: 'Opposite Action',
+        subtitle: 'A DBT skill to change unwanted emotions',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z" })),
+        navigate: 'opposite-action',
+        category: 'Exercises',
+    },
+    {
+        id: 'problem-solving',
+        title: 'Problem-Solving',
+        subtitle: 'A structured CBT approach to challenges',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M19 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-3 3c-1.38 0-2.5 1.12-2.5 2.5 0 .61.21 1.16.58 1.59l-4.08 4.08c-.43-.37-.98-.58-1.59-.58C6.12 11.5 5 12.62 5 14s1.12 2.5 2.5 2.5c1.38 0 2.5-1.12 2.5-2.5 0-.61-.21-1.16-.58-1.59l4.08-4.08c.43.37.98.58 1.59.58 1.38 0 2.5-1.12 2.5-2.5S17.38 6 16 6z" })),
+        navigate: 'problem-solving',
+        category: 'Exercises',
+    },
+    {
+        id: 'safety-plan',
+        title: 'Safety Plan',
+        subtitle: 'Create a plan for crisis moments',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z" })),
+        navigate: 'safety-plan',
+        category: 'Growth',
+    },
+    {
+        id: 'relapse-prevention',
+        title: 'Relapse Prevention',
+        subtitle: 'Plan for triggers & coping',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" })),
+        navigate: 'relapse-prevention',
+        category: 'Growth',
+    },
+    {
+        id: 'values-exercise',
+        title: 'Core Values',
+        subtitle: 'Discover what matters most',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M12 2L2 8.5l10 13.5L22 8.5L12 2zm0 2.31l7.5 5.19L12 18.31L4.5 9.5L12 4.31z" })),
+        navigate: 'values-exercise',
+        category: 'Growth',
+    },
+    {
+        id: 'goals',
+        title: 'S.M.A.R.T. Goals',
+        subtitle: 'Set and track personal goals',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" })),
+        navigate: 'goals',
+        category: 'Growth',
+    },
+    {
+        id: 'cognitive-distortions',
+        title: 'Cognitive Distortions',
+        subtitle: 'Learn to identify unhelpful thought patterns',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L8 12v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" })),
+        navigate: 'cognitive-distortions',
+        category: 'Growth',
+    },
+    {
+        id: 'audit',
+        title: 'AUDIT Screener',
+        subtitle: 'Alcohol use self-assessment',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M21 5V3H3v2l8 9v5H6v2h12v-2h-5v-5l8-9zM7.43 7L5.66 5h12.69l-1.78 2H7.43z" })),
+        navigate: 'audit',
+        category: 'Growth',
+    },
+    {
+        id: 'adhd',
+        title: 'ADHD Screener',
+        subtitle: 'Adult self-report scale',
+        icon: React.createElement('svg', { className: "card-icon", viewBox: "0 0 24 24", fill: "currentColor" }, React.createElement('path', { d: "M19 3h-4.18C14.4 1.84 13.3 1 12 1s-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm2 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z" })),
+        navigate: 'adhd',
+        category: 'Growth',
+    },
+];
